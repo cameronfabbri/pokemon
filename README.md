@@ -11,7 +11,7 @@ pokemon naming convention: `id_game_direction_shiny_mini_mega_num` where each is
 `direction`: Can be `front`, `back`, `left` or `right`<br>
 `shiny`: Either true `t` or false `f`<br>
 `mega`: Either true `t` or false `f`<br>
-`num`: Some games have animated sprites, so this number corresponds to each<br>
+`num`: Some games have animated sprites, so this number corresponds to each
 frame of the animation.
 
 ### Ideas
