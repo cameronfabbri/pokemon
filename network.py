@@ -174,7 +174,7 @@ class Generator(tf.keras.Model):
         self.conv1 = tf.keras.layers.Conv2D(
                 filters=64,
                 strides=1,
-                kernel_size=3,
+                kernel_size=1,
                 padding='SAME',
                 activation=None)
 
@@ -261,5 +261,200 @@ class Generator(tf.keras.Model):
         x = self.conv_out(x)
         print('x:',x.shape)
 
+        f.close()
         sys.stdout = sys.__stdout__
         return x
+
+class Discriminator(tf.keras.Model):
+
+    def __init__(self, c_dim):
+        super(Discriminator, self).__init__()
+
+        self.c_dim = c_dim
+
+        # Initial convolution
+        self.conv1 = tf.keras.layers.Conv2D(
+                filters=64,
+                strides=1,
+                kernel_size=1,
+                padding='SAME',
+                activation=None)
+
+        self.block1 = ResBlock(128, True)
+        self.block2 = ResBlock(256, True)
+        self.block3 = ResBlock(512, True)
+        self.block4 = ResBlock(512, True)
+        self.block5 = ResBlock(512, True)
+        self.block6 = ResBlock(512, True)
+
+        # Final convolution
+        self.conv2 = tf.keras.layers.Conv2D(
+                filters=64,
+                strides=1,
+                kernel_size=4,
+                padding='SAME',
+                activation=tf.nn.leaky_relu)
+
+        self.fc_layers = []
+        for i in range(c_dim):
+            self.fc_layers.append(tf.keras.layers.Dense(1))
+
+    def call(self, inputs):
+
+        f = open(os.devnull, 'w')
+        sys.stdout = f
+        print('\n')
+        print('Inputs')
+        print('-------------------')
+        print(inputs.shape,'\n')
+        print('Conv 1')
+        print('-------------------')
+        x = self.conv1(inputs)
+        print('x:',x.shape,'\n')
+
+        print('ResBlocks')
+        print('-------------------')
+        x = self.block1(x)
+        print('x:',x.shape)
+        x = self.block2(x)
+        print('x:',x.shape)
+        x = self.block3(x)
+        print('x:',x.shape)
+        x = self.block4(x)
+        print('x:',x.shape)
+        x = self.block5(x)
+        print('x:',x.shape)
+        x = self.block6(x)
+        print('x:',x.shape,'\n')
+
+        x = tf.reshape(x, [-1, 512])
+        print('x:',x.shape,'\n')
+
+        print('FC layers')
+        print('-------------------')
+        fc_layers = []
+        for layer in self.fc_layers:
+            fc_layers.append(layer(x))
+
+        f.close()
+        sys.stdout = sys.__stdout__
+        return tf.concat(fc_layers, 1)
+
+
+class Encoder(tf.keras.Model):
+
+    def __init__(
+            self,
+            c_dim,
+            style_dim):
+
+        super(Encoder, self).__init__()
+
+        self.c_dim = c_dim
+        self.style_dim = style_dim
+
+        # Initial convolution
+        self.conv1 = tf.keras.layers.Conv2D(
+                filters=64,
+                strides=1,
+                kernel_size=1,
+                padding='SAME',
+                activation=None)
+
+        self.block1 = ResBlock(128, True)
+        self.block2 = ResBlock(256, True)
+        self.block3 = ResBlock(512, True)
+        self.block4 = ResBlock(512, True)
+        self.block5 = ResBlock(512, True)
+        self.block6 = ResBlock(512, True)
+
+        # Final convolution
+        self.conv2 = tf.keras.layers.Conv2D(
+                filters=64,
+                strides=1,
+                kernel_size=4,
+                padding='SAME',
+                activation=tf.nn.leaky_relu)
+
+        self.fc_layers = []
+        for i in range(c_dim):
+            self.fc_layers.append(tf.keras.layers.Dense(self.style_dim))
+
+    def call(self, inputs):
+
+        x = self.conv1(inputs)
+        x = self.block1(x)
+        x = self.block2(x)
+        x = self.block3(x)
+        x = self.block4(x)
+        x = self.block5(x)
+        x = self.block6(x)
+        x = tf.reshape(x, [-1, 512])
+
+        fc_layers = []
+        for layer in self.fc_layers:
+            fc_layers.append(layer(x))
+        return fc_layers
+
+
+class MappingBlock(tf.keras.Model):
+
+    def __init__(
+            self,
+            style_dim):
+        super(MappingBlock, self).__init__()
+
+        self.layer1 = tf.keras.layers.Dense(
+                units=512,
+                activation=tf.nn.relu)
+        self.layer2 = tf.keras.layers.Dense(
+                units=512,
+                activation=tf.nn.relu)
+        self.layer3 = tf.keras.layers.Dense(
+                units=512,
+                activation=tf.nn.relu)
+        self.layer4 = tf.keras.layers.Dense(
+                units=style_dim)
+
+    def call(self, inputs):
+
+        x = self.layer1(inputs)
+        x = self.layer2(x)
+        x = self.layer3(x)
+        return self.layer4(x)
+
+class MappingNetwork(tf.keras.Model):
+
+    def __init__(
+            self,
+            c_dim,
+            style_dim):
+        super(MappingNetwork, self).__init__()
+
+        self.c_dim = c_dim
+
+        self.shared_layers = []
+
+        self.class_blocks = []
+
+        for i in range(4):
+            self.shared_layers.append(
+                    tf.keras.layers.Dense(
+                        units=512,
+                        activation=tf.nn.relu))
+
+        for i in range(self.c_dim):
+            self.class_blocks.append(MappingBlock(style_dim))
+
+    def call(self, inputs):
+
+        x = inputs
+        for layer in self.shared_layers:
+            x = layer(x)
+
+        output_styles = []
+
+        for block in self.class_blocks:
+            output_styles.append(block(x))
+
+        return output_styles
