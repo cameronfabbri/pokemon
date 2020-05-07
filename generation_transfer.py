@@ -8,10 +8,10 @@ import random
 
 import cv2
 import numpy as np
+import tensorflow as tf
 import tensorflow_addons as tfa
 
 import network
-import tensorflow as tf
 import utils.tf_ops as tfo
 import utils.data_ops as do
 
@@ -43,6 +43,8 @@ def main():
 
     generator = network.Generator()
     generator(image, style)
+
+    discriminator = network.Discriminator()
 
     #gen1_paths = pd.get_paths_from_gen(1)
     #gen2_paths = pd.get_paths_from_gen(2)

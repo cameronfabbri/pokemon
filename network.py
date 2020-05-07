@@ -3,6 +3,9 @@
 """
 #
 #
+import os
+import sys
+
 import tensorflow as tf
 import tensorflow_addons as tfa
 
@@ -205,6 +208,9 @@ class Generator(tf.keras.Model):
 
     def call(self, inputs, style):
 
+        f = open(os.devnull, 'w')
+        sys.stdout = f
+
         print('\n')
         print('Inputs')
         print('-------------------')
@@ -254,5 +260,6 @@ class Generator(tf.keras.Model):
         print('-------------------')
         x = self.conv_out(x)
         print('x:',x.shape)
-        exit()
+
+        sys.stdout = sys.__stdout__
         return x
