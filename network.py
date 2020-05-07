@@ -6,9 +6,9 @@
 import os
 import sys
 
-import tensorflow as tf
 import tensorflow_addons as tfa
 
+import tensorflow as tf
 import utils.tf_ops as tfo
 
 
@@ -43,31 +43,38 @@ class AdaInResBlock(tf.keras.Model):
         self.upsample = upsample
 
         # Gamma and Beta AdaIn fc layers
-        self.fc_g1 = tf.keras.layers.Dense(gb1_dim)
-        self.fc_b1 = tf.keras.layers.Dense(gb1_dim)
-        self.fc_g2 = tf.keras.layers.Dense(gb2_dim)
-        self.fc_b2 = tf.keras.layers.Dense(gb2_dim)
+        self.fc_g1 = tf.keras.layers.Dense(
+                gb1_dim, kernel_initializer='he_normal')
+        self.fc_b1 = tf.keras.layers.Dense(
+                gb1_dim, kernel_initializer='he_normal')
+        self.fc_g2 = tf.keras.layers.Dense(
+                gb2_dim, kernel_initializer='he_normal')
+        self.fc_b2 = tf.keras.layers.Dense(
+                gb2_dim, kernel_initializer='he_normal')
 
         self.conv1 = tf.keras.layers.Conv2D(
                 filters=filters,
                 strides=1,
                 kernel_size=3,
                 padding='SAME',
-                activation=None)
+                activation=None,
+                kernel_initializer='he_normal')
 
         self.conv2 = tf.keras.layers.Conv2D(
                 filters=filters,
                 strides=1,
                 kernel_size=3,
                 padding='SAME',
-                activation=None)
+                activation=None,
+                kernel_initializer='he_normal')
 
         self.conv_m = tf.keras.layers.Conv2D(
                 filters=filters,
                 strides=1,
                 kernel_size=3,
                 padding='SAME',
-                activation=None)
+                activation=None,
+                kernel_initializer='he_normal')
 
         if self.upsample:
             self.upsample_layer = tf.keras.layers.UpSampling2D(size=(2,2))
@@ -79,11 +86,11 @@ class AdaInResBlock(tf.keras.Model):
         b1 = self.fc_b1(style)
         b2 = self.fc_b2(style)
 
-        x = tf.nn.relu(inputs)
+        x = tf.nn.leaky_relu(inputs)
         x = tfo.ada_in(x, g1, b1)
         x = self.conv1(x)
 
-        x = tf.nn.relu(x)
+        x = tf.nn.leaky_relu(x)
         x = tfo.ada_in(x, g2, b2)
         x = self.conv2(x)
 
@@ -125,14 +132,14 @@ class ResBlock(tf.keras.Model):
                 filters=filters,
                 kernel_size=3,
                 padding='SAME',
-                strides=1)
+                strides=1, kernel_initializer='he_normal')
 
         self.norm2 = tfa.layers.InstanceNormalization()
         self.conv2 = tf.keras.layers.Conv2D(
                 filters=filters,
                 kernel_size=3,
                 padding='SAME',
-                strides=1)
+                strides=1, kernel_initializer='he_normal')
 
         # Convolution to match up input and output filters
         self.conv_m = tf.keras.layers.Conv2D(
@@ -140,18 +147,18 @@ class ResBlock(tf.keras.Model):
                 strides=1,
                 kernel_size=3,
                 padding='SAME',
-                activation=None)
+                activation=None, kernel_initializer='he_normal')
 
         if self.downsample:
             self.avg_pool = tf.keras.layers.AveragePooling2D(pool_size=(2,2))
 
     def call(self, inputs):
 
-        x = tf.nn.relu(inputs)
+        x = tf.nn.leaky_relu(inputs)
         x = self.norm1(x)
         x = self.conv1(x)
 
-        x = tf.nn.relu(x)
+        x = tf.nn.leaky_relu(x)
         x = self.norm2(x)
         x = self.conv2(x)
 
@@ -176,7 +183,7 @@ class Generator(tf.keras.Model):
                 strides=1,
                 kernel_size=1,
                 padding='SAME',
-                activation=None)
+                activation=None, kernel_initializer='he_normal')
 
         # Downsampling blocks
         self.block1 = ResBlock(128, True)
@@ -201,7 +208,7 @@ class Generator(tf.keras.Model):
         self.conv_out = tf.keras.layers.Conv2D(
                 filters=3,
                 strides=1,
-                kernel_size=3,
+                kernel_size=1,
                 padding='SAME',
                 activation=None)
 
@@ -254,6 +261,7 @@ class Generator(tf.keras.Model):
         x = self.block11(x, style)
         print('x:',x.shape)
         x = self.block12(x, style)
+        x = tf.nn.leaky_relu(x)
         print('x:',x.shape,'\n')
 
         print('Conv Out')
@@ -278,7 +286,7 @@ class Discriminator(tf.keras.Model):
                 strides=1,
                 kernel_size=1,
                 padding='SAME',
-                activation=None)
+                activation=None, kernel_initializer='he_normal')
 
         self.block1 = ResBlock(128, True)
         self.block2 = ResBlock(256, True)
@@ -293,11 +301,11 @@ class Discriminator(tf.keras.Model):
                 strides=1,
                 kernel_size=4,
                 padding='SAME',
-                activation=tf.nn.leaky_relu)
+                activation=tf.nn.leaky_relu, kernel_initializer='he_normal')
 
         self.fc_layers = []
         for i in range(c_dim):
-            self.fc_layers.append(tf.keras.layers.Dense(1))
+            self.fc_layers.append(tf.keras.layers.Dense(1, kernel_initializer='he_normal'))
 
     def call(self, inputs):
 
@@ -338,7 +346,7 @@ class Discriminator(tf.keras.Model):
 
         f.close()
         sys.stdout = sys.__stdout__
-        return tf.concat(fc_layers, 1)
+        return fc_layers
 
 
 class Encoder(tf.keras.Model):
@@ -359,7 +367,7 @@ class Encoder(tf.keras.Model):
                 strides=1,
                 kernel_size=1,
                 padding='SAME',
-                activation=None)
+                activation=None, kernel_initializer='he_normal')
 
         self.block1 = ResBlock(128, True)
         self.block2 = ResBlock(256, True)
@@ -374,11 +382,11 @@ class Encoder(tf.keras.Model):
                 strides=1,
                 kernel_size=4,
                 padding='SAME',
-                activation=tf.nn.leaky_relu)
+                activation=tf.nn.leaky_relu, kernel_initializer='he_normal')
 
         self.fc_layers = []
         for i in range(c_dim):
-            self.fc_layers.append(tf.keras.layers.Dense(self.style_dim))
+            self.fc_layers.append(tf.keras.layers.Dense(self.style_dim, kernel_initializer='he_normal'))
 
     def call(self, inputs):
 
@@ -406,15 +414,15 @@ class MappingBlock(tf.keras.Model):
 
         self.layer1 = tf.keras.layers.Dense(
                 units=512,
-                activation=tf.nn.relu)
+                activation=tf.nn.relu, kernel_initializer='he_normal')
         self.layer2 = tf.keras.layers.Dense(
                 units=512,
-                activation=tf.nn.relu)
+                activation=tf.nn.relu, kernel_initializer='he_normal')
         self.layer3 = tf.keras.layers.Dense(
                 units=512,
-                activation=tf.nn.relu)
+                activation=tf.nn.relu, kernel_initializer='he_normal')
         self.layer4 = tf.keras.layers.Dense(
-                units=style_dim)
+                units=style_dim, kernel_initializer='he_normal')
 
     def call(self, inputs):
 
@@ -441,7 +449,7 @@ class MappingNetwork(tf.keras.Model):
             self.shared_layers.append(
                     tf.keras.layers.Dense(
                         units=512,
-                        activation=tf.nn.relu))
+                        activation=tf.nn.relu, kernel_initializer='he_normal'))
 
         for i in range(self.c_dim):
             self.class_blocks.append(MappingBlock(style_dim))

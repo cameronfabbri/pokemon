@@ -8,12 +8,11 @@ import random
 
 import cv2
 import numpy as np
-import tensorflow as tf
 import tensorflow_addons as tfa
 
 import network
-import utils.tf_ops as tfo
-import utils.data_ops as do
+import tensorflow as tf
+import utils.losses as losses
 
 from pokemon_data import PokemonData
 
@@ -26,17 +25,8 @@ def load_image(path):
         image = cv2.cvtColor(image, cv2.COLOR_BGRA2BGR)
     return image
 
-def main():
 
-    batch_size = 2
-    learning_rate = 0.0001
-    style_dim = 16
-
-    os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
-    seed_value = 3
-    os.environ['PYTHONHASHSEED'] = str(seed_value)
-    random.seed(seed_value)
-    np.random.seed(seed_value)
+def get_data():
 
     data_dir = os.path.join('data','pokemon','done')
     pd = PokemonData(data_dir)
@@ -75,121 +65,80 @@ def main():
             5: gen5_test_paths
     }
 
-    generator = network.Generator()
-    discriminator = network.Discriminator(c_dim=4)
-    mapping_network = network.MappingNetwork(c_dim=4, style_dim=style_dim)
-    encoder = network.Encoder(c_dim=4, style_dim=style_dim)
+    return train_data_dict, test_data_dict
 
-    generator_optimizer = tf.keras.optimizers.Adam(learning_rate=learning_rate, beta_1=0.0, beta_2=0.99)
-    #generator_optimizer = tfa.optimizers.MovingAverage(generator_optimizer)
-    discriminator_optimizer = tf.keras.optimizers.Adam(learning_rate=learning_rate, beta_1=0.0, beta_2=0.99)
-    mapping_optimizer = tf.keras.optimizers.Adam(learning_rate=1e-6, beta_1=0.0, beta_2=0.99)
+
+def main():
+
+    os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
+    seed_value = 3
+    tf.random.set_seed(seed_value)
+    os.environ['PYTHONHASHSEED'] = str(seed_value)
+    random.seed(seed_value)
+    np.random.seed(seed_value)
+
+    gens = [1, 2, 4, 5]
+
+    batch_size = 2
+    num_iters = 100000
+    style_dim = 16
+    c_dim = 4
+
+    # Network learning rates
+    lr_g = 0.0001
+    lr_d = 0.0001
+    lr_e = 0.0001
+    lr_f = 0.0001
+
+    # Loss function weightings
+    r1_gamma = 1.0
+    lambda_sty = 1.0
+    lambda_cyc = 1.0
+    lambda_ds_start = 2.0
+
+    use_ema = False
+
+    train_data_dict, test_data_dict = get_data()
+
+    # Define networks
+    network_g = network.Generator()
+    network_d = network.Discriminator(c_dim=c_dim)
+    network_f = network.MappingNetwork(c_dim=c_dim, style_dim=style_dim)
+    network_e = network.Encoder(c_dim=c_dim, style_dim=style_dim)
+
+    # Trainable variables for each network
+    tv_g = network_g.trainable_variables
+    tv_d = network_d.trainable_variables
+    tv_e = network_e.trainable_variables
+    tv_f = network_f.trainable_variables
+
+    # Optimizers
+    g_opt = tf.keras.optimizers.Adam(learning_rate=lr_g, beta_1=0.0, beta_2=0.99)
+    d_opt = tf.keras.optimizers.Adam(learning_rate=lr_d, beta_1=0.0, beta_2=0.99)
+    e_opt = tf.keras.optimizers.Adam(learning_rate=lr_e, beta_1=0.0, beta_2=0.99)
+    f_opt = tf.keras.optimizers.Adam(learning_rate=lr_f, beta_1=0.0, beta_2=0.99)
+
+    # Exponential moving average
+    if use_ema:
+        g_opt = tfa.optimizers.MovingAverage(g_opt)
+        e_opt = tfa.optimizers.MovingAverage(e_opt)
+        f_opt = tfa.optimizers.MovingAverage(f_opt)
 
     os.makedirs('model', exist_ok=True)
     checkpoint = tf.train.Checkpoint(
-            encoder=encoder,
-            generator=generator,
-            discriminator=discriminator,
-            mapping_network=mapping_network,
-            mapping_optimizer=mapping_optimizer,
-            generator_optimizer=generator_optimizer,
-            discriminator_optimizer=discriminator_optimizer)
-    manager = tf.train.CheckpointManager(checkpoint, directory='model', max_to_keep=1)
+            network_e=network_e,
+            network_g=network_g,
+            network_d=network_d,
+            network_f=network_f,
+            g_opt=g_opt,
+            d_opt=d_opt,
+            e_opt=e_opt,
+            f_opt=f_opt)
+    manager = tf.train.CheckpointManager(
+            checkpoint, directory='model', max_to_keep=1)
 
     def GT():
         return tf.GradientTape()
-
-    @tf.function
-    def trainingStep(
-            batch_images_x,
-            batch_label,
-            batch_label1,
-            batch_label2):
-
-        """
-        batch_labels_y: Tensor of shape (batch_size, 1)
-        """
-        with GT() as g_tape, GT() as d_tape, GT() as m_tape:
-
-            # These are for the adversarial loss
-            random_style_z = tf.random.normal((batch_size, style_dim), dtype=tf.float32)
-            random_style_s = tf.gather(mapping_network(random_style_z), batch_label)
-
-            # Generate a batch of images given the random style
-            batch_images_g = generator(batch_images_x, random_style_s)
-
-            # GAN loss
-            d_fake = discriminator(batch_images_g)
-            d_real = discriminator(batch_images_x)
-
-            errG = tf.reduce_mean(
-                    tf.nn.sigmoid_cross_entropy_with_logits(
-                        labels=tf.ones_like(d_fake), logits=d_fake))
-
-            errD_real = tf.nn.sigmoid_cross_entropy_with_logits(
-                    logits=d_real, labels=tf.ones_like(d_real))
-            errD_fake = tf.nn.sigmoid_cross_entropy_with_logits(
-                    logits=d_fake, labels=tf.zeros_like(d_real))
-            errD = tf.reduce_mean(errD_real + errD_fake)
-
-            real_loss = tf.reduce_mean(d_real)
-            real_grads = tf.gradients(real_loss, batch_images_x)[0]
-
-            r1_penalty = tf.reduce_mean(tf.square(real_grads))
-            errD += r1_penalty
-            #errG = tf.reduce_mean(d_fake)
-            #errD = tf.reduce_mean(tf.nn.relu(1 + d_real) + tf.nn.relu(1 - d_fake))
-
-            # Encode the style given the generated images
-            encoded_style_s = tf.gather(encoder(batch_images_g), batch_label)
-            style_recon_loss = tf.reduce_mean(tf.abs(random_style_s - encoded_style_s))
-
-            # Style diversification loss
-            random_style_z1 = tf.random.normal((batch_size, style_dim), dtype=tf.float32)
-            random_style_z2 = tf.random.normal((batch_size, style_dim), dtype=tf.float32)
-            random_style_s1 = tf.gather(mapping_network(random_style_z1), batch_label1)
-            random_style_s2 = tf.gather(mapping_network(random_style_z2), batch_label2)
-            batch_images_g1 = generator(batch_images_x, random_style_s1)
-            batch_images_g2 = generator(batch_images_x, random_style_s2)
-
-            # Want to maximize this
-            style_div_loss = -tf.reduce_mean(tf.abs(batch_images_g1-batch_images_g2))
-
-            # Cycle Consistency loss
-            batch_images_cyc = generator(batch_images_g, encoded_style_s)
-            cyc_loss = tf.reduce_mean(tf.abs(batch_images_g-batch_images_cyc))
-
-            # Gradient penalty
-            '''
-            epsilon = tf.random.uniform(shape=[batch_size, 1, 1, 1], minval=0., maxval=1.)
-            x_hat = batch_images_x + epsilon * (batch_images_g - batch_images_x)
-            d_hat = discriminator(x_hat)
-            grad_d_hat = tf.gradients(d_hat, [x_hat])[0]
-            slopes = tf.sqrt(1e-8 + tf.reduce_sum(tf.square(grad_d_hat), axis=[1, 2, 3]))
-            gradient_penalty = 10*tf.reduce_mean((slopes - 1.) ** 2)
-            errD += gradient_penalty
-            '''
-
-            total_errG = errG + style_recon_loss + style_div_loss + cyc_loss
-
-        gen_tv = generator.trainable_variables + encoder.trainable_variables
-
-        gradients_g = g_tape.gradient(total_errG, gen_tv)
-        generator_optimizer.apply_gradients(zip(gradients_g, gen_tv))
-
-        gradients_d = d_tape.gradient(errD, discriminator.trainable_variables)
-        discriminator_optimizer.apply_gradients(zip(gradients_d, discriminator.trainable_variables))
-
-        gradients_m = m_tape.gradient(errG, mapping_network.trainable_variables)
-        mapping_optimizer.apply_gradients(zip(gradients_m, mapping_network.trainable_variables))
-
-        return {
-            'errG': errG,
-            'errD': errD,
-            'style_recon_loss': style_recon_loss,
-            'style_div_loss': style_div_loss,
-            'cyc_loss': cyc_loss
-        }
 
     def get_batch(
             data_dict,
@@ -200,52 +149,152 @@ def main():
         for i, label in enumerate(batch_labels):
             path = random.choice(data_dict[label])
             image = load_image(path)
+            r = random.random()
+            if r < 0.5:
+                image = np.fliplr(image)
             image = cv2.resize(image, (64, 64)).astype(np.float32)
             image = (image / 127.5) - 1.0
             batch_images_x[i, ...] = image
 
         return tf.convert_to_tensor(batch_images_x)
 
-
-    gens = [1,2,4,5]
-
     test_path = random.choice(test_data_dict[5])
 
-    for step in range(1000000):
+    @tf.function
+    def single_step(
+            batch_images_x,
+            batch_labels_org,
+            batch_labels_trg):
+
+        # Image that will go through generator
+        image_x_real = tf.expand_dims(batch_images_x[batch_n], 0)
+
+        label_org = tf.squeeze(batch_labels_org[batch_n], axis=[0,1])
+        label_trg = tf.squeeze(batch_labels_trg[batch_n], axis=[0,1])
+
+        style_z = tf.random.normal((1, style_dim), dtype=tf.float32)
+        style_z1 = tf.random.normal((1, style_dim), dtype=tf.float32)
+        style_z2 = tf.random.normal((1, style_dim), dtype=tf.float32)
+
+        style_s = tf.gather(network_f(style_z), label_trg)
+        style_s1 = tf.gather(network_f(style_z1), label_trg)
+        style_s2 = tf.gather(network_f(style_z2), label_trg)
+
+        image_x_fake = network_g(image_x_real, style_s)
+        image_x_fake1 = network_g(image_x_real, style_s1)
+        image_x_fake2 = network_g(image_x_real, style_s2)
+
+        # Style vector generated by the encoder network on real data
+        style_e_real = tf.gather(network_e(image_x_real), label_org) # (1, 16)
+
+        # Style vector generated by the encoder network on fake data
+        style_e_fake = tf.gather(network_e(image_x_fake), label_trg)
+
+        # Cycle-consistency. Image generated from fake image and real encoded style
+        image_x_cyc = network_g(image_x_fake, style_e_real)
+
+        # Output from network_d on real and fake data
+        d_real = network_d(image_x_real)
+        d_fake = network_d(image_x_fake)
+
+        # ~~ Losses ~~ #
+
+        g_loss = tf.reduce_mean(
+                tf.nn.sigmoid_cross_entropy_with_logits(
+                    labels=tf.ones_like(d_fake), logits=d_fake))
+
+        errD_real = tf.nn.sigmoid_cross_entropy_with_logits(
+            logits=d_real, labels=tf.ones_like(d_real))
+        errD_fake = tf.nn.sigmoid_cross_entropy_with_logits(
+            logits=d_fake, labels=tf.zeros_like(d_fake))
+        d_loss = tf.reduce_mean(errD_real + errD_fake)
+
+        # R1 reg loss for D
+        gradients = tf.gradients(d_real, [image_x_real])[0]
+        r1_penalty = tf.reduce_mean((r1_gamma / 2) * tf.square(gradients))
+
+        d_loss += r1_penalty
+
+        # Style reconstruction loss
+        rec_loss = tf.reduce_mean(tf.abs(style_s - style_e_fake))
+
+        # Diversity loss
+        div_loss = ds_w * tf.reduce_mean(tf.abs(image_x_fake1 - image_x_fake2))
+
+        # Cycle loss
+        cyc_loss = tf.reduce_mean(tf.abs(image_x_cyc - image_x_real))
+
+        return g_loss, d_loss, rec_loss, div_loss, cyc_loss
+
+    test_labels_org = [tf.convert_to_tensor((tf.reshape(x, [1,1]))) for x in gens]
+    test_labels_trg = [tf.convert_to_tensor((tf.reshape(x, [1,1]))) for x in gens]
+
+    for step in range(1, num_iters):
+
+        ds_w = lambda_ds_start * (num_iters - step) / (num_iters - 1)
 
         # These labels are used to get different image classes
-        batch_labels_y = [random.choice(gens) for i in range(batch_size)]
+        batch_labels_org = [random.choice(gens) for i in range(batch_size)]
+        batch_labels_trg = [random.choice(gens) for i in range(batch_size)]
         batch_images_x = get_batch(
                 train_data_dict,
-                batch_labels_y)
+                batch_labels_org)
 
-        # This label is used in training
-        batch_label = tf.convert_to_tensor(np.array([random.choice(gens)]))
-        batch_label1 = tf.convert_to_tensor(np.array([random.choice(gens)]))
-        batch_label2 = tf.convert_to_tensor(np.array([random.choice(gens)]))
+        batch_labels_org = [tf.convert_to_tensor((tf.reshape(x, [1,1]))) for x in batch_labels_org]
+        batch_labels_trg = [tf.convert_to_tensor((tf.reshape(x, [1,1]))) for x in batch_labels_trg]
 
-        step_info = trainingStep(
-                batch_images_x,
-                batch_label,
-                batch_label1,
-                batch_label2)
+        #with GT() as g_tape, GT() as d_tape, GT() as e_tape, GT() as f_tape:
+        with tf.GradientTape() as g_tape, tf.GradientTape() as d_tape, tf.GradientTape() as e_tape, tf.GradientTape() as f_tape:
 
-        errG = step_info['errG'].numpy()
-        errD = step_info['errD'].numpy()
-        recon_loss = step_info['style_recon_loss'].numpy()
-        div_loss = step_info['style_div_loss'].numpy()
-        cyc_loss = step_info['cyc_loss'].numpy()
+            errG = []
+            errD = []
+            rec_loss = []
+            div_loss = []
+            cyc_loss = []
+
+            for batch_n in range(batch_size):
+
+                res = single_step(
+                        batch_images_x,
+                        batch_labels_org,
+                        batch_labels_trg)
+
+                errG.append(res[0])
+                errD.append(res[1])
+                rec_loss.append(res[2])
+                div_loss.append(res[3])
+                cyc_loss.append(res[4])
+
+            g_loss = tf.reduce_mean(errG)
+            d_loss = tf.reduce_mean(errD)
+            cyc_loss = tf.reduce_mean(cyc_loss)
+            rec_loss = tf.reduce_mean(rec_loss)
+            div_loss = tf.reduce_mean(div_loss)
+
+        gradients_g = g_tape.gradient(g_loss, tv_g)
+        gradients_d = d_tape.gradient(d_loss, tv_d)
+        gradients_e = e_tape.gradient(g_loss, tv_e)
+        gradients_f = f_tape.gradient(g_loss, tv_f)
+
+        print(gradients_g)
+        print(tf.reduce_mean(gradients_g))
+        print(tf.norm(gradients_g),'\n')
+
+        g_opt.apply_gradients(zip(gradients_g, tv_g))
+        d_opt.apply_gradients(zip(gradients_d, tv_d))
+        e_opt.apply_gradients(zip(gradients_e, tv_e))
+        f_opt.apply_gradients(zip(gradients_f, tv_f))
 
         statement = ' | step: ' + str(step)
-        statement += ' | errG: %.2f' % errG
-        statement += ' | errD: %.2f' % errD
-        statement += ' | recon_loss: %.3f' % recon_loss
+        statement += ' | errG: %.2f' % g_loss
+        statement += ' | errD: %.2f' % d_loss
+        statement += ' | rec_loss: %.3f' % rec_loss
         statement += ' | div_loss: %.3f' % div_loss
         statement += ' | cyc_loss: %.3f' % cyc_loss
 
-        print(statement)
+        #print(statement)
 
-        if step % 10 == 0:
+        if step % 2 == 0:
 
             manager.save()
 
@@ -255,16 +304,19 @@ def main():
             original_image = ((image+1.0)*127.5).astype(np.uint8)
             gen_images = [original_image]
 
-            batch_images_x = tf.expand_dims(image, 0)
+            image_x_real = tf.expand_dims(image, 0)
 
-            for gen in gens:
+            for n in range(len(gens)):
 
-                batch_label = tf.convert_to_tensor(np.array([gen]))
-                style_z = tf.random.normal((batch_size, style_dim), dtype=tf.float32)
-                style_s = tf.gather(mapping_network(style_z), batch_label)
-                image_g = generator(batch_images_x, style_s)[0].numpy()
-                image_g = ((image_g+1.0)*127.5).astype(np.uint8)
-                gen_images.append(image_g)
+                label_org = tf.squeeze(test_labels_org[n], axis=[0,1])
+                label_trg = tf.squeeze(test_labels_trg[n], axis=[0,1])
+
+                style_z = tf.random.normal((1, style_dim), dtype=tf.float32)
+                style_s = tf.gather(network_f(style_z), label_trg)
+
+                image_x_fake = network_g(image_x_real, style_s)[0].numpy()
+                image_x_fake = ((image_x_fake+1.0)*127.5).astype(np.uint8)
+                gen_images.append(image_x_fake)
 
             canvas = cv2.hconcat(gen_images)
             cv2.imwrite(os.path.join('model', 'canvas_'+str(step)+'.png'), canvas)
