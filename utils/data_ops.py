@@ -9,59 +9,65 @@ import numpy as np
 from PIL import Image, ImageOps
 
 
+def normalize(x):
+    return (x / 127.5) - 1.0
+
+
+def unnormalize(x):
+    return (x + 1.0) * 127.5
+
+
+def save_image(f, x):
+    try:
+        x = x.numpy()
+    except:
+        pass
+    cv2.imwrite(f, np.squeeze(unnormalize(x).astype(np.uint8)))
+
+
 def crop_image(im):
     """ Crops image tight to the pokemon """
-    '''
+
     h, w, c = im.shape
-    white_col = h*3*255
-    white_row = w*3*255
 
-    for col_num, col in enumerate(im):
-        if np.sum(col) != white_col:
-            col_start = col_num
+    im_n = im/255.
+    comb_img = np.sum(im_n, axis=2)
+
+    # Loop through rows
+    for n, row in enumerate(comb_img):
+        if np.sum(row) < 3.*w:
+            start_y = n
+            break
+    for n, row in enumerate(reversed(comb_img)):
+        if np.sum(row) < 3.*w:
+            end_y = n
             break
 
-    for col_num, col in enumerate(np.fliplr(im)):
-        if np.sum(col) != white_col:
-            col_end = w - col_num
+    # Loop through columns
+    for n, col in enumerate(comb_img.T):
+        if np.sum(col) < 3.*h:
+            start_x = n
+            break
+    for n, col in enumerate(reversed(comb_img.T)):
+        if np.sum(col) < 3.*h:
+            end_x = n
             break
 
-    im = np.rot90(im)
+    end_y = h-end_y
+    end_x = w-end_x
 
-    for row_num, row in enumerate(im):
-        if np.sum(row) != white_row:
-            row_start = row_num
-            break
+    if start_y > 0:
+        start_y = start_y - 1
+    if end_y < h:
+        end_y = end_y + 1
+    if start_x > 0:
+        start_x = start_x - 1
+    if end_x < h:
+        end_x = end_x + 1
 
-    for row_num, row in enumerate(np.fliplr(im)):
-        if np.sum(row) != white_row:
-            row_end = w - row_num
-            break
+    cropped = im[start_y:end_y, start_x:end_x, :]
 
-    im = np.rot90(im)
-    im = np.rot90(im)
-    im = np.rot90(im)
-    crop = im[col_start:col_end, row_start:row_end, :]
-    '''
-
-    padding = 1
-    image=Image.open(im)
-    image.load()
-    imageSize = image.size
-
-    # remove alpha channel
-    invert_im = image.convert("RGB")
-
-    # invert image (so that white is 0)
-    invert_im = ImageOps.invert(invert_im)
-    imageBox = invert_im.getbbox()
-    imageBox = tuple(np.asarray(imageBox))#+padding)
-
-    cropped = image.crop(imageBox)
-    cropped.save('image2.png')
-    #cv2.imwrite('image2.png', out)
-    exit()
-    return x
+    return cropped
 
 def get_paths(data_dir):
     """ Returns a list of paths """
