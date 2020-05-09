@@ -37,5 +37,3 @@ frame of the animation.
     - Different "shape" (bird, four legs, etc.)
 
 
-### Work Log
-

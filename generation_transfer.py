@@ -80,12 +80,16 @@ def main():
     random.seed(seed_value)
     np.random.seed(seed_value)
 
-    #gens = [1, 2, 4, 5]
-    gens = [1, 5]
-    c_dim = len(gens)
+    # Using gen1 and gen5
+    gens = {
+        0: 1,
+        1: 5,
+    }
+
+    c_dim = len(list(gens.keys()))
 
     save_freq = 50
-    batch_size = 1
+    batch_size = 4
     num_iters = 100000
     latent_dim = 16
     style_dim = 64
@@ -101,10 +105,11 @@ def main():
     lambda_sty = 1.0
     lambda_cyc = 1.0
     lambda_ds_start = 1.0
+    lambda_reg = 1.0
 
     use_ema = False
 
-    train_data_dict, test_data_dict = get_data(gens)
+    train_data_dict, test_data_dict = get_data(list(gens.values()))
 
     # Define networks
     network_g = network.Generator()
@@ -161,16 +166,192 @@ def main():
 
         return tf.convert_to_tensor(batch_images_x)
 
-    def GT():
-        return tf.GradientTape()
 
 
     @tf.function
+    def training_step_d_map(
+            x_real,
+            y_org,
+            y_trg,
+            z_trg):
+        """
+        Function to train the discriminator using fake images generated using
+        the style network
+        """
 
+        with tf.GradientTape() as d_tape:
+
+            # Real images
+            d_real = tf.gather_nd(network_d(x_real), y_org)
+
+            d_loss_real = tf.nn.sigmoid_cross_entropy_with_logits(
+                logits=d_real, labels=tf.ones_like(d_real))
+
+            # R1 reg loss for D
+            gradients = tf.gradients(d_real, [x_real])[0]
+            d_loss_reg = tf.reduce_mean((r1_gamma / 2) * tf.square(gradients))
+
+            #s_trg = tf.expand_dims(tf.gather_nd(network_f(z_trg), y_trg), 1)
+            s_trg = network_f(z_trg, y_trg)
+
+            # Fake images using mapping network
+            x_fake = network_g(x_real, s_trg)
+
+            d_fake = tf.gather_nd(network_d(x_fake), y_trg)
+
+            d_loss_fake = tf.nn.sigmoid_cross_entropy_with_logits(
+                logits=d_fake, labels=tf.zeros_like(d_fake))
+
+            d_loss = d_loss_real + d_loss_fake + (lambda_reg * d_loss_reg)
+
+        gradients_d = d_tape.gradient(d_loss, network_d.trainable_variables)
+        d_opt.apply_gradients(zip(gradients_d, network_d.trainable_variables))
+
+        return d_loss
 
 
     @tf.function
-    def trainingStep(
+    def training_step_d_ref(
+            x_real,
+            y_org,
+            y_trg,
+            x_ref):
+        """
+        Function to train the discriminator using the encoder to generate a
+        style code given a reference image
+        """
+
+        with tf.GradientTape() as d_tape:
+
+            # Real images
+            d_real = tf.gather_nd(network_d(x_real), y_org)
+            d_loss_real = tf.nn.sigmoid_cross_entropy_with_logits(
+                logits=d_real, labels=tf.ones_like(d_real))
+
+            # R1 reg loss for D
+            gradients = tf.gradients(d_real, [x_real])[0]
+            d_loss_reg = tf.reduce_mean((r1_gamma / 2) * tf.square(gradients))
+
+            # Generate style code using encoder on reference image
+            #s_trg = tf.expand_dims(tf.gather_nd(network_e(x_ref), y_trg), 1)
+            s_trg = network_e(x_ref, y_trg)
+
+            x_fake = network_g(x_real, s_trg)
+
+            d_fake = tf.gather_nd(network_d(x_fake), y_trg)
+
+            d_loss_fake = tf.nn.sigmoid_cross_entropy_with_logits(
+                logits=d_fake, labels=tf.zeros_like(d_fake))
+
+            d_loss = d_loss_real + d_loss_fake + (lambda_reg * d_loss_reg)
+
+        gradients_d = d_tape.gradient(d_loss, network_d.trainable_variables)
+        d_opt.apply_gradients(zip(gradients_d, network_d.trainable_variables))
+
+        return d_loss
+
+    @tf.function
+    def training_step_g_map(
+            x_real,
+            y_org,
+            y_trg,
+            z_trg,
+            z_trg2):
+
+        with tf.GradientTape() as g_tape, tf.GradientTape() as e_tape, tf.GradientTape() as f_tape:
+
+            s_trg = network_f(z_trg, y_trg)
+
+            x_fake = network_g(x_real, s_trg)
+
+            d_fake = tf.gather_nd(network_d(x_fake), y_trg)
+
+            loss_g = tf.reduce_mean(
+                    tf.nn.sigmoid_cross_entropy_with_logits(
+                        labels=tf.ones_like(d_fake), logits=d_fake))
+
+            # Style reconstruction loss
+            s_pred = network_e(x_fake, y_trg)
+            loss_sty = tf.reduce_mean(tf.abs(s_pred - s_trg))
+
+            # Diversity loss
+            s_trg2 = network_f(z_trg2, y_trg)
+
+            x_fake2 = network_g(x_real, s_trg2)
+
+            loss_ds = tf.reduce_mean(tf.abs(x_fake - x_fake2))
+
+            # cycle consistency loss
+            s_org = network_e(x_real, y_org)
+            x_rec = network_g(x_fake, s_org)
+
+            loss_cyc = tf.reduce_mean(tf.abs(x_rec - x_real))
+
+            loss = loss_g + loss_sty - loss_ds + loss_cyc
+
+        gradients_g = g_tape.gradient(loss, network_g.trainable_variables)
+        gradients_e = e_tape.gradient(loss, network_e.trainable_variables)
+        gradients_f = f_tape.gradient(loss, network_f.trainable_variables)
+
+        g_opt.apply_gradients(zip(gradients_g, network_g.trainable_variables))
+        e_opt.apply_gradients(zip(gradients_e, network_e.trainable_variables))
+        f_opt.apply_gradients(zip(gradients_f, network_f.trainable_variables))
+
+        return loss_g, loss_sty, loss_ds, loss_cyc
+
+    @tf.function
+    def training_step_g_ref(
+            x_real,
+            y_org,
+            y_trg,
+            x_ref,
+            x_ref2):
+
+        with tf.GradientTape() as g_tape, tf.GradientTape() as e_tape, tf.GradientTape() as f_tape:
+
+            #s_trg = tf.expand_dims(tf.gather_nd(network_e(x_ref), y_trg), 1)
+            s_trg = network_e(x_ref, y_trg)
+
+            x_fake = network_g(x_real, s_trg)
+
+            d_fake = tf.gather_nd(network_d(x_fake), y_trg)
+
+            loss_g = tf.reduce_mean(
+                    tf.nn.sigmoid_cross_entropy_with_logits(
+                        labels=tf.ones_like(d_fake), logits=d_fake))
+
+            # Style reconstruction loss
+            #s_pred = tf.gather_nd(network_e(x_fake), y_trg)
+            s_pred = network_e(x_fake, y_trg)
+            loss_sty = tf.reduce_mean(tf.abs(s_pred - s_trg))
+
+            # Diversity loss
+            #s_trg2 = tf.expand_dims(tf.gather_nd(network_e(x_ref2), y_trg), 1)
+            s_trg2 = network_e(x_ref2, y_trg)
+
+            x_fake2 = network_g(x_real, s_trg2)
+
+            loss_ds = tf.reduce_mean(tf.abs(x_fake - x_fake2))
+
+            # cycle consistency loss
+
+            #s_org = tf.expand_dims(tf.gather_nd(network_e(x_real), y_org), 1)
+            s_org = network_e(x_real, y_org)
+            x_rec = network_g(x_fake, s_org)
+
+            loss_cyc = tf.reduce_mean(tf.abs(x_rec - x_real))
+
+            loss = loss_g + loss_sty - loss_ds + loss_cyc
+
+        gradients_g = g_tape.gradient(loss, network_g.trainable_variables)
+        #gradients_e = e_tape.gradient(loss, network_e.trainable_variables)
+
+        g_opt.apply_gradients(zip(gradients_g, network_g.trainable_variables))
+        #e_opt.apply_gradients(zip(gradients_e, network_e.trainable_variables))
+
+        return loss_g, loss_sty, loss_ds, loss_cyc
+
+    def training_step(
             x_real,
             y_org,
             x_ref,
@@ -178,188 +359,120 @@ def main():
             y_trg,
             z_trg,
             z_trg2):
+        """
+        """
 
-        with GT() as g_tape, GT() as d_tape, GT() as e_tape, GT() as f_tape:
+        # ~~ Train the discriminator using mapping network ~~ #
+        d_loss1 = training_step_d_map(
+                x_real=x_real,
+                y_org=y_org,
+                y_trg=y_trg,
+                z_trg=z_trg)
 
-            # ~~ Train the discriminator using mapping network ~~ #
+        # ~~ Train the discriminator using the encoder network with reference image ~~ #
+        d_loss2 = training_step_d_ref(
+                x_real=x_real,
+                y_org=y_org,
+                y_trg=y_trg,
+                x_ref=x_ref)
 
-            # Real images
-            d_real = network_d(x_real, y_org)
-            d_loss_real = tf.nn.sigmoid_cross_entropy_with_logits(
-                logits=d_real, labels=tf.ones_like(d_real))
+        # ~~ Train the generator using the mapping network ~~ #
+        res = training_step_g_map(
+                x_real,
+                y_org,
+                y_trg,
+                z_trg,
+                z_trg2)
+        (loss_g1, loss_sty1, loss_ds1, loss_cyc1) = res
 
-            # R1 reg loss for D
-            gradients = tf.gradients(d_real, [x_real])[0]
-            d_loss_reg = tf.reduce_mean((r1_gamma / 2) * tf.square(gradients))
+        # ~~ Train the generator using the encoder network with reference image ~~ #
+        res = training_step_g_ref(
+                x_real,
+                y_org,
+                y_trg,
+                x_ref,
+                x_ref2)
 
-            # Fake images using mapping network
-            s_trg = network_f(z_trg)
+        (loss_g2, loss_sty2, loss_ds2, loss_cyc2) = res
 
-            x_fake = network_g(x_real, s_trg)
+        loss_g = (loss_g1+loss_g2)/2.
+        d_loss = tf.reduce_mean((d_loss1+d_loss2)/2.)
+        loss_sty = (loss_sty1 + loss_sty2)/2.
+        loss_ds = (loss_ds1+loss_ds2)/2.
+        loss_cyc = (loss_cyc1 + loss_cyc2)/2.
 
-            d_fake = network_d(x_fake, y_trg)
+        return loss_g, d_loss, loss_sty, loss_ds, loss_cyc
 
-            d_loss_fake = tf.nn.sigmoid_cross_entropy_with_logits(
-                logits=d_fake, labels=tf.zeros_like(d_fake))
-
-            d_loss = d_loss_real + d_loss_fake + (lambda_reg * d_loss_reg)
-
-            # ~~ Train the discriminator using encoder network with reference image ~~ #
-            d_real = network_d(x_real, y_org)
-            d_loss_real = tf.nn.sigmoid_cross_entropy_with_logits(
-                logits=d_real, labels=tf.ones_like(d_real))
-
-            # R1 reg loss for D
-            gradients = tf.gradients(d_real, [x_real])[0]
-            d_loss_reg = tf.reduce_mean((r1_gamma / 2) * tf.square(gradients))
-
-            # Fake images using mapping network
-            s_trg = network_f(z_trg)
-
-            x_fake = network_g(x_real, s_trg)
-
-            d_fake = network_d(x_fake, y_trg)
-
-            d_loss_fake = tf.nn.sigmoid_cross_entropy_with_logits(
-                logits=d_fake, labels=tf.zeros_like(d_fake))
-
-            d_loss = d_loss_real + d_loss_fake + (lambda_reg * d_loss_reg)
-
-
-            style_z = tf.random.normal((1, latent_dim), dtype=tf.float32)
-            style_z1 = tf.random.normal((1, latent_dim), dtype=tf.float32)
-            style_z2 = tf.random.normal((1, latent_dim), dtype=tf.float32)
-
-            style_s = tf.gather(network_f(style_z), label_trg)
-            style_s1 = tf.gather(network_f(style_z1), label_trg)
-            style_s2 = tf.gather(network_f(style_z2), label_trg)
-
-            image_x_fake = network_g(image_x_real, style_s)
-            image_x_fake1 = network_g(image_x_real, style_s1)
-            image_x_fake2 = network_g(image_x_real, style_s2)
-
-            # Style vector generated by the encoder network on real data
-            style_e_real = tf.gather(network_e(image_x_real), label_org) # (1, 16)
-
-            # Style vector generated by the encoder network on fake data
-            style_e_fake = tf.gather(network_e(image_x_fake), label_trg)
-
-            # Cycle-consistency. Image generated from fake image and real encoded style
-            image_x_cyc = network_g(image_x_fake, style_e_real)
-
-            # Output from network_d on real and fake data
-            d_real = tf.gather(network_d(image_x_real), label_org)
-            d_fake = tf.gather(network_d(image_x_fake), label_trg)
-
-            # ~~ Losses ~~ #
-
-            g_loss = tf.reduce_mean(
-                    tf.nn.sigmoid_cross_entropy_with_logits(
-                        labels=tf.ones_like(d_fake), logits=d_fake))
-
-            errD_real = tf.nn.sigmoid_cross_entropy_with_logits(
-                logits=d_real, labels=tf.ones_like(d_real))
-            errD_fake = tf.nn.sigmoid_cross_entropy_with_logits(
-                logits=d_fake, labels=tf.zeros_like(d_fake))
-            d_loss = tf.reduce_mean(errD_real + errD_fake)
-
-            # Style reconstruction loss
-            rec_loss = tf.reduce_mean(tf.abs(style_s - style_e_fake))
-
-            # Diversity loss
-            div_loss = ds_w * tf.reduce_mean(tf.abs(image_x_fake1 - image_x_fake2))
-
-            # Cycle loss
-            cyc_loss = tf.reduce_mean(tf.abs(image_x_cyc - image_x_real))
-
-            total_g = g_loss+cyc_loss+rec_loss+div_loss
-
-        gradients_g = g_tape.gradient(total_g, network_g.trainable_variables)
-        gradients_d = d_tape.gradient(d_loss, network_d.trainable_variables)
-        gradients_e = e_tape.gradient(total_g, network_e.trainable_variables)
-        gradients_f = f_tape.gradient(total_g, network_f.trainable_variables)
-
-        g_opt.apply_gradients(zip(gradients_g, network_g.trainable_variables))
-        d_opt.apply_gradients(zip(gradients_d, network_d.trainable_variables))
-        e_opt.apply_gradients(zip(gradients_e, network_e.trainable_variables))
-        f_opt.apply_gradients(zip(gradients_f, network_f.trainable_variables))
-
-        return g_loss, d_loss, rec_loss, div_loss, cyc_loss, image_x_fake
-
-    # Static testing data
-    test_labels_org = [random.choice(gens) for i in range(batch_size)]
-    test_labels_trg = [random.choice(gens) for i in range(batch_size)]
-    test_images_x = get_batch(
+    test_y_trg = [1]
+    test_x_real = get_batch(
             test_data_dict,
-            test_labels_org)
-    test_style_z = tf.random.normal((1, style_dim), dtype=tf.float32)
+            [gens[i] for i in test_y_trg])
+    test_y_trg = tf.convert_to_tensor([[n,x] for n, x in enumerate(test_y_trg)])
+    test_z_trg = tf.random.normal((batch_size, latent_dim), dtype=tf.float32)
+    test_x_real_im = np.squeeze(do.unnormalize(test_x_real[0].numpy()).astype(np.uint8))
 
     for step in range(1, num_iters):
 
-        ds_w = lambda_ds_start * (num_iters - step) / (num_iters - 1)
+        lambda_ds = lambda_ds_start * (num_iters - step) / (num_iters - 1)
 
-        # These labels are used to get different image classes
-        batch_labels_org = [random.choice(gens) for i in range(batch_size)]
-        batch_labels_trg = [random.choice(gens) for i in range(batch_size)]
-        batch_images_x = get_batch(
+        # x_real goes with y_org
+        # x_ref goes with y_trg
+        # x_ref2 goes with y_trg
+
+        y_org = [random.choice(list(gens.keys())) for i in range(batch_size)]
+        y_trg = [random.choice(list(gens.keys())) for i in range(batch_size)]
+
+        x_real = get_batch(
                 train_data_dict,
-                batch_labels_org)
+                [gens[i] for i in y_org])
 
-        batch_labels_org = [tf.convert_to_tensor((tf.reshape(x, [1,1]))) for x in batch_labels_org]
-        batch_labels_trg = [tf.convert_to_tensor((tf.reshape(x, [1,1]))) for x in batch_labels_trg]
+        x_ref = get_batch(
+                train_data_dict,
+                [gens[i] for i in y_trg])
 
-        # Image that will go through generator
-        image_x_real = tf.expand_dims(batch_images_x[0], 0)
+        x_ref2 = get_batch(
+                train_data_dict,
+                [gens[i] for i in y_trg])
 
-        label_org = tf.squeeze(batch_labels_org[0], axis=[0,1])
-        label_trg = tf.squeeze(batch_labels_trg[0], axis=[0,1])
+        z_trg = tf.random.normal((batch_size, latent_dim), dtype=tf.float32)
+        z_trg2 = tf.random.normal((batch_size, latent_dim), dtype=tf.float32)
 
-        res = single_step(
-                image_x_real,
-                label_org,
-                label_trg)
+        y_org = tf.convert_to_tensor([[n,x] for n, x in enumerate(y_org)])
+        y_trg = tf.convert_to_tensor([[n,x] for n, x in enumerate(y_trg)])
 
-        g_loss = res[0]
+        res = training_step(
+                x_real=x_real,
+                y_org=y_org,
+                x_ref=x_ref,
+                x_ref2=x_ref2,
+                y_trg=y_trg,
+                z_trg=z_trg,
+                z_trg2=z_trg2)
+
+        loss_g = res[0]
         d_loss = res[1]
         rec_loss = res[2]
         div_loss = res[3]
         cyc_loss = res[4]
 
         statement = ' | step: ' + str(step)
-        statement += ' | errG: %.5f' % g_loss
+        statement += ' | errG: %.5f' % loss_g
         statement += ' | errD: %.5f' % d_loss
         statement += ' | rec_loss: %.5f' % rec_loss
         statement += ' | div_loss: %.5f' % div_loss
         statement += ' | cyc_loss: %.5f' % cyc_loss
         print(statement)
 
-        if step % save_freq == 0:
+        if step % 2 == 0:#save_freq == 0:
 
             manager.save()
+            test_s_trg = network_f(test_z_trg, test_y_trg)
 
-            test_labels_org = [tf.convert_to_tensor((tf.reshape(x, [1,1]))) for x in test_labels_org]
-            test_labels_trg = [tf.convert_to_tensor((tf.reshape(x, [1,1]))) for x in test_labels_trg]
-            test_image_x_real = tf.expand_dims(test_images_x[0], 0)
-            test_label_org = tf.expand_dims(test_labels_org[0], 0)
-            test_label_trg = tf.expand_dims(test_labels_trg[0], 0)
-            test_style_s = tf.gather(network_f(test_style_z), label_trg)
+            test_x_fake = network_g(test_x_real, test_s_trg)
 
-            test_image_x_fake = network_g(test_image_x_real, test_style_s)
-            test_style_e_real = tf.gather(network_e(test_image_x_real), test_label_org) # (1, 16)
-            test_style_e_fake = tf.gather(network_e(test_image_x_fake), test_label_trg)
+            test_x_fake = np.squeeze(do.unnormalize(test_x_fake[0].numpy()).astype(np.uint8))
 
-            # Cycle-consistency. Image generated from fake image and real encoded style
-            test_image_x_cyc = network_g(test_image_x_fake, test_style_e_real)
-
-            # Using the style from the encoder
-            test_image_x_e = np.squeeze(
-                    do.unnormalize(
-                        network_g(test_image_x_real, test_style_e_real).numpy())).astype(np.uint8)
-
-            test_image_x_real = np.squeeze(do.unnormalize(test_image_x_real.numpy()).astype(np.uint8))
-            test_image_x_fake = np.squeeze(do.unnormalize(test_image_x_fake.numpy()).astype(np.uint8))
-            test_image_x_cyc = np.squeeze(do.unnormalize(test_image_x_cyc.numpy()).astype(np.uint8))
-            canvas = cv2.hconcat([test_image_x_real, test_image_x_e, test_image_x_fake, test_image_x_cyc])
+            canvas = cv2.hconcat([test_x_real_im, test_x_fake])
 
             cv2.imwrite(os.path.join('model', 'canvas_'+str(step)+'.png'), canvas)
 

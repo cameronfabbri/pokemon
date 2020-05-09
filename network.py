@@ -399,7 +399,7 @@ class Encoder(tf.keras.Model):
             fc_layers.append(tf.keras.layers.Dense(self.style_dim, kernel_initializer='he_normal'))
         self.fc_layers = fc_layers
 
-    def call(self, inputs, training=True):
+    def call(self, inputs, y_label, training=True):
 
         x = self.conv1(inputs)
         x = self.block1(x)
@@ -413,7 +413,8 @@ class Encoder(tf.keras.Model):
         fc_layers = []
         for layer in self.fc_layers:
             fc_layers.append(layer(x))
-        return fc_layers
+
+        return tf.gather_nd(fc_layers, y_label)
 
 
 class MappingBlock(tf.keras.Model):
@@ -442,6 +443,7 @@ class MappingBlock(tf.keras.Model):
         x = self.layer3(x)
         return self.layer4(x)
 
+
 class MappingNetwork(tf.keras.Model):
 
     def __init__(
@@ -467,7 +469,7 @@ class MappingNetwork(tf.keras.Model):
         self.shared_layers = shared_layers
         self.class_blocks = class_blocks
 
-    def call(self, inputs, training=True):
+    def call(self, inputs, y_label, training=True):
 
         x = inputs
         for layer in self.shared_layers:
@@ -478,4 +480,5 @@ class MappingNetwork(tf.keras.Model):
         for block in self.class_blocks:
             output_styles.append(block(x))
 
-        return output_styles
+        out = tf.gather_nd(output_styles, y_label)
+        return out
