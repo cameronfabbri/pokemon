@@ -7,9 +7,9 @@ import os
 import sys
 import math
 
-import tensorflow as tf
 import tensorflow_addons as tfa
 
+import tensorflow as tf
 import utils.tf_ops as tfo
 
 
@@ -340,7 +340,7 @@ class Discriminator(tf.keras.Model):
                 padding='VALID',
                 kernel_initializer='he_normal')
 
-    def call(self, inputs, training=True):
+    def call(self, inputs, y_label, training=True):
 
         x = self.conv1(inputs)
         x = self.block1(x)
@@ -355,7 +355,7 @@ class Discriminator(tf.keras.Model):
 
         x = tf.reshape(x, [-1, self.c_dim])
 
-        return x
+        return tf.expand_dims(tf.gather_nd(x, y_label), 1)
 
 
 class Encoder(tf.keras.Model):

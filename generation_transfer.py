@@ -8,12 +8,11 @@ import random
 
 import cv2
 import numpy as np
-import tensorflow as tf
 import tensorflow_addons as tfa
 
 import network
+import tensorflow as tf
 import utils.data_ops as do
-import utils.losses as losses
 
 from pokemon_data import PokemonData
 
@@ -26,6 +25,10 @@ def load_image(path):
         image = cv2.cvtColor(image, cv2.COLOR_BGRA2BGR)
     image = do.crop_image(image)
     return image
+
+
+def get_afhq():
+    data_dir = '/home/cameron/Research/datasets/data/afhq'
 
 
 def get_data(gens):
@@ -49,24 +52,24 @@ def get_data(gens):
         random.shuffle(gen2_paths)
         gen2_train_paths = np.asarray(gen2_paths[:int(0.95*len(gen1_paths))])
         gen2_test_paths = np.asarray(gen2_paths[int(0.95*len(gen1_paths)):])
-        train_data_dict[2] = gen1_train_paths
-        test_data_dict[2] = gen1_test_paths
+        train_data_dict[2] = gen2_train_paths
+        test_data_dict[2] = gen2_test_paths
 
     if 4 in gens:
         gen4_paths = pd.get_paths_from_gen(4)
         random.shuffle(gen4_paths)
         gen4_train_paths = np.asarray(gen4_paths[:int(0.95*len(gen1_paths))])
         gen4_test_paths = np.asarray(gen4_paths[int(0.95*len(gen1_paths)):])
-        train_data_dict[4] = gen1_train_paths
-        test_data_dict[4] = gen1_test_paths
+        train_data_dict[4] = gen4_train_paths
+        test_data_dict[4] = gen4_test_paths
 
     if 5 in gens:
         gen5_paths = pd.get_paths_from_gen(5)
         random.shuffle(gen5_paths)
         gen5_train_paths = np.asarray(gen5_paths[:int(0.95*len(gen1_paths))])
         gen5_test_paths = np.asarray(gen5_paths[int(0.95*len(gen1_paths)):])
-        train_data_dict[5] = gen1_train_paths
-        test_data_dict[5] = gen1_test_paths
+        train_data_dict[5] = gen5_train_paths
+        test_data_dict[5] = gen5_test_paths
 
     return train_data_dict, test_data_dict
 
@@ -80,19 +83,27 @@ def main():
     random.seed(seed_value)
     np.random.seed(seed_value)
 
-    # Using gen1 and gen5
-    gens = {
-        0: 1,
-        1: 5,
-    }
+    dataset = 'afhq'
+    dataset = 'pokemon'
 
-    c_dim = len(list(gens.keys()))
+    if dataset == 'pokemon':
+        # Using gen1 and gen5
+        gens = {
+            0: 1,
+            1: 5,
+        }
+
+        train_data_dict, test_data_dict = get_data(list(gens.values()))
+        c_dim = len(list(gens.keys()))
+
+    elif dataset == 'afhq':
+        train_data_dict, test_data_dict = get_afhq()
 
     save_freq = 100
-    batch_size = 4
+    batch_size = 2
     num_iters = 100000
-    latent_dim = 16
-    style_dim = 64
+    latent_dim = 16 # 16
+    style_dim = 64 # 64
 
     # Network learning rates
     lr_g = 1e-4
@@ -103,13 +114,14 @@ def main():
     # Loss function weightings
     r1_gamma = 1.0
     lambda_sty = 1.0
-    lambda_cyc = 5.0
+    lambda_cyc = 1.0
     lambda_ds_start = 1.0
     lambda_reg = 1.0
 
-    use_ema = False
+    # Weight for high pass filter
+    w_hpf = 1.
 
-    train_data_dict, test_data_dict = get_data(list(gens.values()))
+    use_ema = True
 
     # Define networks
     network_g = network.Generator()
@@ -135,18 +147,6 @@ def main():
         f_opt = tfa.optimizers.MovingAverage(f_opt)
 
     os.makedirs('model', exist_ok=True)
-    checkpoint = tf.train.Checkpoint(
-            network_g=network_g,
-            network_d=network_d,
-            network_e=network_e,
-            network_f=network_f,
-            g_opt=g_opt,
-            d_opt=d_opt,
-            e_opt=e_opt,
-            f_opt=f_opt)
-
-    manager = tf.train.CheckpointManager(
-            checkpoint, directory='model', max_to_keep=1)
 
     def get_batch(
             data_dict,
@@ -166,8 +166,6 @@ def main():
 
         return tf.convert_to_tensor(batch_images_x)
 
-
-
     @tf.function
     def training_step_d_map(
             x_real,
@@ -182,7 +180,7 @@ def main():
         with tf.GradientTape() as d_tape:
 
             # Real images
-            d_real = tf.gather_nd(network_d(x_real), y_org)
+            d_real = network_d(x_real, y_org)
 
             d_loss_real = tf.nn.sigmoid_cross_entropy_with_logits(
                 logits=d_real, labels=tf.ones_like(d_real))
@@ -196,7 +194,7 @@ def main():
             # Fake images using mapping network
             x_fake = network_g(x_real, s_trg)
 
-            d_fake = tf.gather_nd(network_d(x_fake), y_trg)
+            d_fake = network_d(x_fake, y_trg)
 
             d_loss_fake = tf.nn.sigmoid_cross_entropy_with_logits(
                 logits=d_fake, labels=tf.zeros_like(d_fake))
@@ -207,7 +205,6 @@ def main():
         d_opt.apply_gradients(zip(gradients_d, network_d.trainable_variables))
 
         return d_loss
-
 
     @tf.function
     def training_step_d_ref(
@@ -223,7 +220,7 @@ def main():
         with tf.GradientTape() as d_tape:
 
             # Real images
-            d_real = tf.gather_nd(network_d(x_real), y_org)
+            d_real = network_d(x_real, y_org)
             d_loss_real = tf.nn.sigmoid_cross_entropy_with_logits(
                 logits=d_real, labels=tf.ones_like(d_real))
 
@@ -236,7 +233,7 @@ def main():
 
             x_fake = network_g(x_real, s_trg)
 
-            d_fake = tf.gather_nd(network_d(x_fake), y_trg)
+            d_fake = network_d(x_fake, y_trg)
 
             d_loss_fake = tf.nn.sigmoid_cross_entropy_with_logits(
                 logits=d_fake, labels=tf.zeros_like(d_fake))
@@ -263,7 +260,7 @@ def main():
 
             x_fake = network_g(x_real, s_trg)
 
-            d_fake = tf.gather_nd(network_d(x_fake), y_trg)
+            d_fake = network_d(x_fake, y_trg)
 
             loss_g = tf.reduce_mean(
                     tf.nn.sigmoid_cross_entropy_with_logits(
@@ -313,7 +310,7 @@ def main():
 
             x_fake = network_g(x_real, s_trg)
 
-            d_fake = tf.gather_nd(network_d(x_fake), y_trg)
+            d_fake = network_d(x_fake, y_trg)
 
             loss_g = tf.reduce_mean(
                     tf.nn.sigmoid_cross_entropy_with_logits(
@@ -331,7 +328,6 @@ def main():
             loss_ds = tf.reduce_mean(tf.abs(x_fake - x_fake2))
 
             # cycle consistency loss
-
             s_org = network_e(x_real, y_org)
             x_rec = network_g(x_fake, s_org)
 
@@ -341,10 +337,10 @@ def main():
 
         # TODO - they don't optimize network_e here for some reason
         gradients_g = g_tape.gradient(loss, network_g.trainable_variables)
-        gradients_e = e_tape.gradient(loss, network_e.trainable_variables)
+        #gradients_e = e_tape.gradient(loss, network_e.trainable_variables)
 
         g_opt.apply_gradients(zip(gradients_g, network_g.trainable_variables))
-        e_opt.apply_gradients(zip(gradients_e, network_e.trainable_variables))
+        #e_opt.apply_gradients(zip(gradients_e, network_e.trainable_variables))
 
         return loss_g, loss_sty, loss_ds, loss_cyc
 
@@ -392,7 +388,6 @@ def main():
                 x_ref,
                 x_ref2,
                 lambda_ds)
-
         (loss_g2, loss_sty2, loss_ds2, loss_cyc2) = res
 
         loss_g = (loss_g1+loss_g2)/2.
@@ -464,18 +459,40 @@ def main():
         statement += ' | cyc_loss: %.5f' % cyc_loss
         print(statement)
 
-        if step % save_freq == 0:
+        if step % 2 == 0:
 
-            manager.save()
-            test_s_trg = network_f(test_z_trg, test_y_trg)
+            # Average the model parameters before saving out
+            print('\nAveraging model parameters...')
+            g_opt.assign_average_vars(network_g.variables)
+            e_opt.assign_average_vars(network_e.variables)
+            f_opt.assign_average_vars(network_f.variables)
+            print('Done\n')
 
-            test_x_fake = network_g(test_x_real, test_s_trg)
+            print('Saving out models...')
+            network_g.save_weights('model/network_g', save_format='tf')
+            network_e.save_weights('model/network_e', save_format='tf')
+            network_f.save_weights('model/network_f', save_format='tf')
+            network_d.save_weights('model/network_d', save_format='tf')
+            print('Done\n')
+
+            print('Loading up averaged model parameters...')
+            test_network_g = tf.keras.load_model('model/network_g')
+            test_network_e = tf.keras.load_model('model/network_g')
+            test_network_f = tf.keras.load_model('model/network_g')
+            print('Done\n')
+
+            # Generate a style code from the noise and gen
+            test_s_trg = test_network_f(test_z_trg, test_y_trg)
+
+            # Generate an image given the input image and style code
+            test_x_fake = test_network_g(test_x_real, test_s_trg)
 
             test_x_fake = np.squeeze(do.unnormalize(test_x_fake[0].numpy()).astype(np.uint8))
 
             canvas = cv2.hconcat([test_x_real_im, test_x_fake])
 
             cv2.imwrite(os.path.join('model', 'canvas_'+str(step)+'.png'), canvas)
+            exit()
 
 
 if __name__ == '__main__':
