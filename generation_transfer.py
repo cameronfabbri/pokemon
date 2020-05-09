@@ -88,7 +88,7 @@ def main():
 
     c_dim = len(list(gens.keys()))
 
-    save_freq = 50
+    save_freq = 100
     batch_size = 4
     num_iters = 100000
     latent_dim = 16
@@ -103,7 +103,7 @@ def main():
     # Loss function weightings
     r1_gamma = 1.0
     lambda_sty = 1.0
-    lambda_cyc = 1.0
+    lambda_cyc = 5.0
     lambda_ds_start = 1.0
     lambda_reg = 1.0
 
@@ -191,7 +191,6 @@ def main():
             gradients = tf.gradients(d_real, [x_real])[0]
             d_loss_reg = tf.reduce_mean((r1_gamma / 2) * tf.square(gradients))
 
-            #s_trg = tf.expand_dims(tf.gather_nd(network_f(z_trg), y_trg), 1)
             s_trg = network_f(z_trg, y_trg)
 
             # Fake images using mapping network
@@ -233,7 +232,6 @@ def main():
             d_loss_reg = tf.reduce_mean((r1_gamma / 2) * tf.square(gradients))
 
             # Generate style code using encoder on reference image
-            #s_trg = tf.expand_dims(tf.gather_nd(network_e(x_ref), y_trg), 1)
             s_trg = network_e(x_ref, y_trg)
 
             x_fake = network_g(x_real, s_trg)
@@ -256,7 +254,8 @@ def main():
             y_org,
             y_trg,
             z_trg,
-            z_trg2):
+            z_trg2,
+            lambda_ds):
 
         with tf.GradientTape() as g_tape, tf.GradientTape() as e_tape, tf.GradientTape() as f_tape:
 
@@ -287,7 +286,7 @@ def main():
 
             loss_cyc = tf.reduce_mean(tf.abs(x_rec - x_real))
 
-            loss = loss_g + loss_sty - loss_ds + loss_cyc
+            loss = loss_g + (lambda_sty*loss_sty) - (lambda_ds*loss_ds) + (lambda_cyc*loss_cyc)
 
         gradients_g = g_tape.gradient(loss, network_g.trainable_variables)
         gradients_e = e_tape.gradient(loss, network_e.trainable_variables)
@@ -305,11 +304,11 @@ def main():
             y_org,
             y_trg,
             x_ref,
-            x_ref2):
+            x_ref2,
+            lambda_ds):
 
         with tf.GradientTape() as g_tape, tf.GradientTape() as e_tape, tf.GradientTape() as f_tape:
 
-            #s_trg = tf.expand_dims(tf.gather_nd(network_e(x_ref), y_trg), 1)
             s_trg = network_e(x_ref, y_trg)
 
             x_fake = network_g(x_real, s_trg)
@@ -321,12 +320,10 @@ def main():
                         labels=tf.ones_like(d_fake), logits=d_fake))
 
             # Style reconstruction loss
-            #s_pred = tf.gather_nd(network_e(x_fake), y_trg)
             s_pred = network_e(x_fake, y_trg)
             loss_sty = tf.reduce_mean(tf.abs(s_pred - s_trg))
 
             # Diversity loss
-            #s_trg2 = tf.expand_dims(tf.gather_nd(network_e(x_ref2), y_trg), 1)
             s_trg2 = network_e(x_ref2, y_trg)
 
             x_fake2 = network_g(x_real, s_trg2)
@@ -335,19 +332,19 @@ def main():
 
             # cycle consistency loss
 
-            #s_org = tf.expand_dims(tf.gather_nd(network_e(x_real), y_org), 1)
             s_org = network_e(x_real, y_org)
             x_rec = network_g(x_fake, s_org)
 
             loss_cyc = tf.reduce_mean(tf.abs(x_rec - x_real))
 
-            loss = loss_g + loss_sty - loss_ds + loss_cyc
+            loss = loss_g + (lambda_sty*loss_sty) - (lambda_ds*loss_ds) + (lambda_cyc*loss_cyc)
 
+        # TODO - they don't optimize network_e here for some reason
         gradients_g = g_tape.gradient(loss, network_g.trainable_variables)
-        #gradients_e = e_tape.gradient(loss, network_e.trainable_variables)
+        gradients_e = e_tape.gradient(loss, network_e.trainable_variables)
 
         g_opt.apply_gradients(zip(gradients_g, network_g.trainable_variables))
-        #e_opt.apply_gradients(zip(gradients_e, network_e.trainable_variables))
+        e_opt.apply_gradients(zip(gradients_e, network_e.trainable_variables))
 
         return loss_g, loss_sty, loss_ds, loss_cyc
 
@@ -358,7 +355,8 @@ def main():
             x_ref2,
             y_trg,
             z_trg,
-            z_trg2):
+            z_trg2,
+            lambda_ds):
         """
         """
 
@@ -382,7 +380,8 @@ def main():
                 y_org,
                 y_trg,
                 z_trg,
-                z_trg2)
+                z_trg2,
+                lambda_ds)
         (loss_g1, loss_sty1, loss_ds1, loss_cyc1) = res
 
         # ~~ Train the generator using the encoder network with reference image ~~ #
@@ -391,7 +390,8 @@ def main():
                 y_org,
                 y_trg,
                 x_ref,
-                x_ref2)
+                x_ref2,
+                lambda_ds)
 
         (loss_g2, loss_sty2, loss_ds2, loss_cyc2) = res
 
@@ -413,7 +413,7 @@ def main():
 
     for step in range(1, num_iters):
 
-        lambda_ds = lambda_ds_start * (num_iters - step) / (num_iters - 1)
+        lambda_ds = tf.convert_to_tensor(lambda_ds_start * (num_iters - step) / (num_iters - 1))
 
         # x_real goes with y_org
         # x_ref goes with y_trg
@@ -447,7 +447,8 @@ def main():
                 x_ref2=x_ref2,
                 y_trg=y_trg,
                 z_trg=z_trg,
-                z_trg2=z_trg2)
+                z_trg2=z_trg2,
+                lambda_ds=lambda_ds)
 
         loss_g = res[0]
         d_loss = res[1]
@@ -463,7 +464,7 @@ def main():
         statement += ' | cyc_loss: %.5f' % cyc_loss
         print(statement)
 
-        if step % 2 == 0:#save_freq == 0:
+        if step % save_freq == 0:
 
             manager.save()
             test_s_trg = network_f(test_z_trg, test_y_trg)
