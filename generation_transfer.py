@@ -468,7 +468,7 @@ def main():
         statement += ' | cyc_loss: %.5f' % cyc_loss
         print(statement)
 
-        if step % 10 == 0:
+        if step % save_freq == 0:
 
             print('Saving out models...\n')
 
