@@ -100,7 +100,7 @@ def main():
         train_data_dict, test_data_dict = get_afhq()
 
     save_freq = 100
-    batch_size = 2
+    batch_size = 8
     num_iters = 100000
     latent_dim = 16 # 16
     style_dim = 64 # 64
@@ -129,27 +129,19 @@ def main():
     network_f = network.MappingNetwork(c_dim=c_dim, style_dim=style_dim)
     network_e = network.Encoder(c_dim=c_dim, style_dim=style_dim)
 
-    # Testing networks that use the parameters from EMA
-    #test_network_g = network.Generator()
-    #test_network_e = network.Encoder(c_dim=c_dim, style_dim=style_dim)
-    #test_network_f = network.MappingNetwork(c_dim=c_dim, style_dim=style_dim)
-
     # Optimizers
-    #g_opt = tf.keras.optimizers.Adam(learning_rate=lr_g, beta_1=0.0, beta_2=0.99)
-    #d_opt = tf.keras.optimizers.Adam(learning_rate=lr_d, beta_1=0.0, beta_2=0.99)
-    #e_opt = tf.keras.optimizers.Adam(learning_rate=lr_e, beta_1=0.0, beta_2=0.99)
-    #f_opt = tf.keras.optimizers.Adam(learning_rate=lr_f, beta_1=0.0, beta_2=0.99)
-
     g_opt = tfa.optimizers.AdamW(learning_rate=lr_g, beta_1=0.0, beta_2=0.99, weight_decay=1e-4)
     d_opt = tfa.optimizers.AdamW(learning_rate=lr_d, beta_1=0.0, beta_2=0.99, weight_decay=1e-4)
     e_opt = tfa.optimizers.AdamW(learning_rate=lr_e, beta_1=0.0, beta_2=0.99, weight_decay=1e-4)
     f_opt = tfa.optimizers.AdamW(learning_rate=lr_f, beta_1=0.0, beta_2=0.99, weight_decay=1e-4)
 
     # Exponential moving average
-    g_opt = tfa.optimizers.MovingAverage(g_opt)
-    e_opt = tfa.optimizers.MovingAverage(e_opt)
-    f_opt = tfa.optimizers.MovingAverage(f_opt)
+    if use_ema:
+        g_opt = tfa.optimizers.MovingAverage(g_opt)
+        e_opt = tfa.optimizers.MovingAverage(e_opt)
+        f_opt = tfa.optimizers.MovingAverage(f_opt)
 
+    # Directories to save all the models in
     os.makedirs('models/', exist_ok=True)
     os.makedirs('models/network_g/', exist_ok=True)
     os.makedirs('models/network_d/', exist_ok=True)
@@ -343,12 +335,10 @@ def main():
 
             loss = loss_g + (lambda_sty*loss_sty) - (lambda_ds*loss_ds) + (lambda_cyc*loss_cyc)
 
-        # TODO - they don't optimize network_e here for some reason
-        gradients_g = g_tape.gradient(loss, network_g.trainable_variables)
-        #gradients_e = e_tape.gradient(loss, network_e.trainable_variables)
+        # NOTE - they don't optimize network_e here for some reason
 
+        gradients_g = g_tape.gradient(loss, network_g.trainable_variables)
         g_opt.apply_gradients(zip(gradients_g, network_g.trainable_variables))
-        #e_opt.apply_gradients(zip(gradients_e, network_e.trainable_variables))
 
         return loss_g, loss_sty, loss_ds, loss_cyc
 
@@ -406,6 +396,7 @@ def main():
 
         return loss_g, d_loss, loss_sty, loss_ds, loss_cyc
 
+    # Static testing data
     test_y_gen1 = [0]
     test_y_gen5 = [1]
 
