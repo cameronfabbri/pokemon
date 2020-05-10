@@ -129,6 +129,11 @@ def main():
     network_f = network.MappingNetwork(c_dim=c_dim, style_dim=style_dim)
     network_e = network.Encoder(c_dim=c_dim, style_dim=style_dim)
 
+    # Testing networks that use the parameters from EMA
+    #test_network_g = network.Generator()
+    #test_network_e = network.Encoder(c_dim=c_dim, style_dim=style_dim)
+    #test_network_f = network.MappingNetwork(c_dim=c_dim, style_dim=style_dim)
+
     # Optimizers
     #g_opt = tf.keras.optimizers.Adam(learning_rate=lr_g, beta_1=0.0, beta_2=0.99)
     #d_opt = tf.keras.optimizers.Adam(learning_rate=lr_d, beta_1=0.0, beta_2=0.99)
@@ -141,12 +146,15 @@ def main():
     f_opt = tfa.optimizers.AdamW(learning_rate=lr_f, beta_1=0.0, beta_2=0.99, weight_decay=1e-4)
 
     # Exponential moving average
-    if use_ema:
-        g_opt = tfa.optimizers.MovingAverage(g_opt)
-        e_opt = tfa.optimizers.MovingAverage(e_opt)
-        f_opt = tfa.optimizers.MovingAverage(f_opt)
+    g_opt = tfa.optimizers.MovingAverage(g_opt)
+    e_opt = tfa.optimizers.MovingAverage(e_opt)
+    f_opt = tfa.optimizers.MovingAverage(f_opt)
 
-    os.makedirs('model', exist_ok=True)
+    os.makedirs('models/', exist_ok=True)
+    os.makedirs('models/network_g/', exist_ok=True)
+    os.makedirs('models/network_d/', exist_ok=True)
+    os.makedirs('models/network_e/', exist_ok=True)
+    os.makedirs('models/network_f/', exist_ok=True)
 
     def get_batch(
             data_dict,
@@ -398,13 +406,23 @@ def main():
 
         return loss_g, d_loss, loss_sty, loss_ds, loss_cyc
 
-    test_y_trg = [1]
-    test_x_real = get_batch(
+    test_y_gen1 = [0]
+    test_y_gen5 = [1]
+
+    test_x_gen1 = get_batch(
             test_data_dict,
-            [gens[i] for i in test_y_trg])
-    test_y_trg = tf.convert_to_tensor([[n,x] for n, x in enumerate(test_y_trg)])
-    test_z_trg = tf.random.normal((batch_size, latent_dim), dtype=tf.float32)
-    test_x_real_im = np.squeeze(do.unnormalize(test_x_real[0].numpy()).astype(np.uint8))
+            [gens[i] for i in test_y_gen1])
+
+    test_x_gen5 = get_batch(
+            test_data_dict,
+            [gens[i] for i in test_y_gen5])
+
+    test_y_gen1 = tf.convert_to_tensor([[n,x] for n, x in enumerate(test_y_gen5)])
+    test_y_gen5 = tf.convert_to_tensor([[n,x] for n, x in enumerate(test_y_gen5)])
+
+    test_z = tf.random.normal((batch_size, latent_dim), dtype=tf.float32)
+    test_x_gen1_im = np.squeeze(do.unnormalize(test_x_gen1[0].numpy()).astype(np.uint8))
+    test_x_gen5_im = np.squeeze(do.unnormalize(test_x_gen5[0].numpy()).astype(np.uint8))
 
     for step in range(1, num_iters):
 
@@ -459,40 +477,57 @@ def main():
         statement += ' | cyc_loss: %.5f' % cyc_loss
         print(statement)
 
-        if step % 2 == 0:
+        if step % 10 == 0:
 
-            # Average the model parameters before saving out
-            print('\nAveraging model parameters...')
+            print('Saving out models...\n')
+
+            # Save model weights (non averaged)
+            network_g.save_weights('models/network_g/model', save_format='tf')
+            network_d.save_weights('models/network_d/model', save_format='tf')
+            network_e.save_weights('models/network_e/model', save_format='tf')
+            network_f.save_weights('models/network_f/model', save_format='tf')
+
+            # Average the model parameters
             g_opt.assign_average_vars(network_g.variables)
             e_opt.assign_average_vars(network_e.variables)
             f_opt.assign_average_vars(network_f.variables)
-            print('Done\n')
 
-            print('Saving out models...')
-            network_g.save_weights('model/network_g', save_format='tf')
-            network_e.save_weights('model/network_e', save_format='tf')
-            network_f.save_weights('model/network_f', save_format='tf')
-            network_d.save_weights('model/network_d', save_format='tf')
-            print('Done\n')
+            # Test the model using the averaged weights
 
-            print('Loading up averaged model parameters...')
-            test_network_g = tf.keras.load_model('model/network_g')
-            test_network_e = tf.keras.load_model('model/network_g')
-            test_network_f = tf.keras.load_model('model/network_g')
-            print('Done\n')
+            # Generate a fake gen1 image given a gen5 image and a style code for gen1
+            test_style_code = network_f(test_z, test_y_gen1)
+            test_x_fake1 = network_g(test_x_gen5, test_style_code)
 
-            # Generate a style code from the noise and gen
-            test_s_trg = test_network_f(test_z_trg, test_y_trg)
+            # Generate a fake gen5 image given a gen1 image and a style code for gen5
+            test_style_code = network_f(test_z, test_y_gen5)
+            test_x_fake2 = network_g(test_x_gen1, test_style_code)
 
-            # Generate an image given the input image and style code
-            test_x_fake = test_network_g(test_x_real, test_s_trg)
+            # Generate a fake gen1 image given a reference gen5 image
+            test_style_code = network_e(test_x_gen1, test_y_gen1)
+            test_x_fake3 = network_g(test_x_gen5, test_style_code)
 
-            test_x_fake = np.squeeze(do.unnormalize(test_x_fake[0].numpy()).astype(np.uint8))
+            # Generate a fake gen5 image given a reference gen1 image
+            test_style_code = network_e(test_x_gen5, test_y_gen5)
+            test_x_fake4 = network_g(test_x_gen1, test_style_code)
 
-            canvas = cv2.hconcat([test_x_real_im, test_x_fake])
+            test_x_fake1 = np.squeeze(do.unnormalize(test_x_fake1[0].numpy()).astype(np.uint8))
+            test_x_fake2 = np.squeeze(do.unnormalize(test_x_fake2[0].numpy()).astype(np.uint8))
+            test_x_fake3 = np.squeeze(do.unnormalize(test_x_fake3[0].numpy()).astype(np.uint8))
+            test_x_fake4 = np.squeeze(do.unnormalize(test_x_fake4[0].numpy()).astype(np.uint8))
 
-            cv2.imwrite(os.path.join('model', 'canvas_'+str(step)+'.png'), canvas)
-            exit()
+            # Create canvas and save image
+            canvas1 = cv2.hconcat([test_x_gen1_im, test_x_gen5_im])
+            canvas2 = cv2.hconcat([test_x_fake1, test_x_fake2])
+            canvas3 = cv2.hconcat([test_x_fake3, test_x_fake4])
+            canvas = cv2.vconcat([canvas1, canvas2, canvas3])
+            cv2.imwrite(os.path.join('models', 'canvas_'+str(step)+'.png'), canvas)
+
+            # Load back up the non-averaged weights to continue training with
+            network_g.load_weights('models/network_g/model')
+            network_e.load_weights('models/network_e/model')
+            network_f.load_weights('models/network_f/model')
+
+
 
 
 if __name__ == '__main__':
