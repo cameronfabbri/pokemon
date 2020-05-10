@@ -50,24 +50,24 @@ def get_data(gens):
     if 2 in gens:
         gen2_paths = pd.get_paths_from_gen(2)
         random.shuffle(gen2_paths)
-        gen2_train_paths = np.asarray(gen2_paths[:int(0.95*len(gen1_paths))])
-        gen2_test_paths = np.asarray(gen2_paths[int(0.95*len(gen1_paths)):])
+        gen2_train_paths = np.asarray(gen2_paths[:int(0.95*len(gen2_paths))])
+        gen2_test_paths = np.asarray(gen2_paths[int(0.95*len(gen2_paths)):])
         train_data_dict[2] = gen2_train_paths
         test_data_dict[2] = gen2_test_paths
 
     if 4 in gens:
         gen4_paths = pd.get_paths_from_gen(4)
         random.shuffle(gen4_paths)
-        gen4_train_paths = np.asarray(gen4_paths[:int(0.95*len(gen1_paths))])
-        gen4_test_paths = np.asarray(gen4_paths[int(0.95*len(gen1_paths)):])
+        gen4_train_paths = np.asarray(gen4_paths[:int(0.95*len(gen4_paths))])
+        gen4_test_paths = np.asarray(gen4_paths[int(0.95*len(gen4_paths)):])
         train_data_dict[4] = gen4_train_paths
         test_data_dict[4] = gen4_test_paths
 
     if 5 in gens:
         gen5_paths = pd.get_paths_from_gen(5)
         random.shuffle(gen5_paths)
-        gen5_train_paths = np.asarray(gen5_paths[:int(0.95*len(gen1_paths))])
-        gen5_test_paths = np.asarray(gen5_paths[int(0.95*len(gen1_paths)):])
+        gen5_train_paths = np.asarray(gen5_paths[:int(0.95*len(gen5_paths))])
+        gen5_test_paths = np.asarray(gen5_paths[int(0.95*len(gen5_paths)):])
         train_data_dict[5] = gen5_train_paths
         test_data_dict[5] = gen5_test_paths
 
@@ -99,7 +99,7 @@ def main():
     elif dataset == 'afhq':
         train_data_dict, test_data_dict = get_afhq()
 
-    save_freq = 100
+    save_freq = 500
     batch_size = 8
     num_iters = 100000
     latent_dim = 16 # 16
