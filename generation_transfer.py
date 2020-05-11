@@ -8,70 +8,29 @@ import random
 
 import cv2
 import numpy as np
+import tensorflow as tf
 import tensorflow_addons as tfa
 
 import network
-import tensorflow as tf
 import utils.data_ops as do
 
 from pokemon_data import PokemonData
 
 
-def load_image(path):
-    image = cv2.imread(path, cv2.IMREAD_UNCHANGED)
-    if image.shape[-1] == 4:
-        trans_mask = image[:, :, 3] == 0
-        image[trans_mask] = [255, 255, 255, 255]
-        image = cv2.cvtColor(image, cv2.COLOR_BGRA2BGR)
-    image = do.crop_image(image)
-    return image
+def make_model_dirs():
+    """ Creates all directories to save all the models in """
 
-
-def get_afhq():
-    data_dir = '/home/cameron/Research/datasets/data/afhq'
-
-
-def get_data(gens):
-
-    data_dir = os.path.join('data','pokemon','done')
-    pd = PokemonData(data_dir)
-
-    train_data_dict = {}
-    test_data_dict = {}
-
-    if 1 in gens:
-        gen1_paths = pd.get_paths_from_gen(1)
-        random.shuffle(gen1_paths)
-        gen1_train_paths = np.asarray(gen1_paths[:int(0.95*len(gen1_paths))])
-        gen1_test_paths = np.asarray(gen1_paths[int(0.95*len(gen1_paths)):])
-        train_data_dict[1] = gen1_train_paths
-        test_data_dict[1] = gen1_test_paths
-
-    if 2 in gens:
-        gen2_paths = pd.get_paths_from_gen(2)
-        random.shuffle(gen2_paths)
-        gen2_train_paths = np.asarray(gen2_paths[:int(0.95*len(gen2_paths))])
-        gen2_test_paths = np.asarray(gen2_paths[int(0.95*len(gen2_paths)):])
-        train_data_dict[2] = gen2_train_paths
-        test_data_dict[2] = gen2_test_paths
-
-    if 4 in gens:
-        gen4_paths = pd.get_paths_from_gen(4)
-        random.shuffle(gen4_paths)
-        gen4_train_paths = np.asarray(gen4_paths[:int(0.95*len(gen4_paths))])
-        gen4_test_paths = np.asarray(gen4_paths[int(0.95*len(gen4_paths)):])
-        train_data_dict[4] = gen4_train_paths
-        test_data_dict[4] = gen4_test_paths
-
-    if 5 in gens:
-        gen5_paths = pd.get_paths_from_gen(5)
-        random.shuffle(gen5_paths)
-        gen5_train_paths = np.asarray(gen5_paths[:int(0.95*len(gen5_paths))])
-        gen5_test_paths = np.asarray(gen5_paths[int(0.95*len(gen5_paths)):])
-        train_data_dict[5] = gen5_train_paths
-        test_data_dict[5] = gen5_test_paths
-
-    return train_data_dict, test_data_dict
+    opn = os.path.normpath
+    os.makedirs(opn('models/'), exist_ok=True)
+    os.makedirs(opn('models/images/'), exist_ok=True)
+    os.makedirs(opn('models/network_g/'), exist_ok=True)
+    os.makedirs(opn('models/network_d/'), exist_ok=True)
+    os.makedirs(opn('models/network_e/'), exist_ok=True)
+    os.makedirs(opn('models/network_f/'), exist_ok=True)
+    os.makedirs(opn('models/network_g_avg/'), exist_ok=True)
+    os.makedirs(opn('models/network_d_avg/'), exist_ok=True)
+    os.makedirs(opn('models/network_e_avg/'), exist_ok=True)
+    os.makedirs(opn('models/network_f_avg/'), exist_ok=True)
 
 
 def main():
@@ -84,7 +43,7 @@ def main():
     np.random.seed(seed_value)
 
     dataset = 'afhq'
-    dataset = 'pokemon'
+    #dataset = 'pokemon'
 
     if dataset == 'pokemon':
         # Using gen1 and gen5
@@ -93,11 +52,21 @@ def main():
             1: 5,
         }
 
-        train_data_dict, test_data_dict = get_data(list(gens.values()))
-        c_dim = len(list(gens.keys()))
+        train_data_dict, test_data_dict = do.get_pokemon_data(list(gens.values()))
 
     elif dataset == 'afhq':
-        train_data_dict, test_data_dict = get_afhq()
+
+        gens = {
+            0: 1,
+            1: 2,
+        }
+
+        train_data_dict, test_data_dict = do.get_afhq()
+
+    # Create model directories
+    make_model_dirs()
+
+    c_dim = len(list(gens.keys()))
 
     save_freq = 500
     batch_size = 8
@@ -115,11 +84,11 @@ def main():
     r1_gamma = 1.0
     lambda_sty = 1.0
     lambda_cyc = 1.0
-    lambda_ds_start = 1.0
     lambda_reg = 1.0
+    lambda_ds_start = 1.0
 
     # Weight for high pass filter
-    w_hpf = 1.
+    #w_hpf = 1.
 
     use_ema = True
 
@@ -141,12 +110,15 @@ def main():
         e_opt = tfa.optimizers.MovingAverage(e_opt)
         f_opt = tfa.optimizers.MovingAverage(f_opt)
 
-    # Directories to save all the models in
-    os.makedirs('models/', exist_ok=True)
-    os.makedirs('models/network_g/', exist_ok=True)
-    os.makedirs('models/network_d/', exist_ok=True)
-    os.makedirs('models/network_e/', exist_ok=True)
-    os.makedirs('models/network_f/', exist_ok=True)
+    # If a model exists, load it
+    if os.path.exists('models/network_g_avg/checkpoint'):
+        network_g.load_weights('models/network_g_avg/model')
+    if os.path.exists('models/network_d_avg/checkpoint'):
+        network_d.load_weights('models/network_d_avg/model')
+    if os.path.exists('models/network_e_avg/checkpoint'):
+        network_e.load_weights('models/network_e_avg/model')
+    if os.path.exists('models/network_f_avg/checkpoint'):
+        network_f.load_weights('models/network_f_avg/model')
 
     def get_batch(
             data_dict,
@@ -156,7 +128,7 @@ def main():
 
         for i, label in enumerate(batch_labels):
             path = random.choice(data_dict[label])
-            image = load_image(path)
+            image = do.load_image(path)
             r = random.random()
             if r < 0.5:
                 image = np.fliplr(image)
@@ -190,9 +162,11 @@ def main():
             d_loss_reg = tf.reduce_mean((r1_gamma / 2) * tf.square(gradients))
 
             s_trg = network_f(z_trg, y_trg)
-
-            # Fake images using mapping network
             x_fake = network_g(x_real, s_trg)
+
+            # Don't want to take the gradient of the generation of the fake sample into account
+            s_trg = tf.stop_gradient(s_trg)
+            x_fake = tf.stop_gradient(x_fake)
 
             d_fake = network_d(x_fake, y_trg)
 
@@ -230,8 +204,11 @@ def main():
 
             # Generate style code using encoder on reference image
             s_trg = network_e(x_ref, y_trg)
-
             x_fake = network_g(x_real, s_trg)
+
+            # Don't want to take the gradient of the generation of the fake sample into account
+            s_trg = tf.stop_gradient(s_trg)
+            x_fake = tf.stop_gradient(x_fake)
 
             d_fake = network_d(x_fake, y_trg)
 
@@ -408,7 +385,7 @@ def main():
             test_data_dict,
             [gens[i] for i in test_y_gen5])
 
-    test_y_gen1 = tf.convert_to_tensor([[n,x] for n, x in enumerate(test_y_gen5)])
+    test_y_gen1 = tf.convert_to_tensor([[n,x] for n, x in enumerate(test_y_gen1)])
     test_y_gen5 = tf.convert_to_tensor([[n,x] for n, x in enumerate(test_y_gen5)])
 
     test_z = tf.random.normal((batch_size, latent_dim), dtype=tf.float32)
@@ -478,47 +455,50 @@ def main():
             network_e.save_weights('models/network_e/model', save_format='tf')
             network_f.save_weights('models/network_f/model', save_format='tf')
 
-            # Average the model parameters
+            # Average the model parameters except discriminator
             g_opt.assign_average_vars(network_g.variables)
             e_opt.assign_average_vars(network_e.variables)
             f_opt.assign_average_vars(network_f.variables)
+
+            # Save out averaged network weights for testing externally
+            network_g.save_weights('models/network_g_avg/model', save_format='tf')
+            network_d.save_weights('models/network_d_avg/model', save_format='tf')
+            network_e.save_weights('models/network_e_avg/model', save_format='tf')
+            network_f.save_weights('models/network_f_avg/model', save_format='tf')
 
             # Test the model using the averaged weights
 
             # Generate a fake gen1 image given a gen5 image and a style code for gen1
             test_style_code = network_f(test_z, test_y_gen1)
             test_x_fake1 = network_g(test_x_gen5, test_style_code)
+            test_x_fake1 = do.to_image(test_x_fake1)
 
             # Generate a fake gen5 image given a gen1 image and a style code for gen5
             test_style_code = network_f(test_z, test_y_gen5)
             test_x_fake2 = network_g(test_x_gen1, test_style_code)
+            test_x_fake2 = do.to_image(test_x_fake2)
 
             # Generate a fake gen1 image given a reference gen5 image
             test_style_code = network_e(test_x_gen1, test_y_gen1)
             test_x_fake3 = network_g(test_x_gen5, test_style_code)
+            test_x_fake3 = do.to_image(test_x_fake3)
 
             # Generate a fake gen5 image given a reference gen1 image
             test_style_code = network_e(test_x_gen5, test_y_gen5)
             test_x_fake4 = network_g(test_x_gen1, test_style_code)
-
-            test_x_fake1 = np.squeeze(do.unnormalize(test_x_fake1[0].numpy()).astype(np.uint8))
-            test_x_fake2 = np.squeeze(do.unnormalize(test_x_fake2[0].numpy()).astype(np.uint8))
-            test_x_fake3 = np.squeeze(do.unnormalize(test_x_fake3[0].numpy()).astype(np.uint8))
-            test_x_fake4 = np.squeeze(do.unnormalize(test_x_fake4[0].numpy()).astype(np.uint8))
+            test_x_fake4 = do.to_image(test_x_fake4)
 
             # Create canvas and save image
             canvas1 = cv2.hconcat([test_x_gen1_im, test_x_gen5_im])
             canvas2 = cv2.hconcat([test_x_fake1, test_x_fake2])
             canvas3 = cv2.hconcat([test_x_fake3, test_x_fake4])
             canvas = cv2.vconcat([canvas1, canvas2, canvas3])
-            cv2.imwrite(os.path.join('models', 'canvas_'+str(step)+'.png'), canvas)
+            cv2.imwrite(os.path.join('models', 'images', 'canvas_'+str(step)+'.png'), canvas)
 
             # Load back up the non-averaged weights to continue training with
             network_g.load_weights('models/network_g/model')
             network_e.load_weights('models/network_e/model')
             network_f.load_weights('models/network_f/model')
-
-
 
 
 if __name__ == '__main__':
