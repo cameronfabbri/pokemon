@@ -77,6 +77,7 @@ class PokemonData:
         self.generations[2] = ['gold', 'silver', 'crystal']
         self.generations[4] = ['hgss']
         self.generations[5] = ['bw']
+        self.generations[9] = ['dreamworld']
 
     def get_paths_from_gen(self, gen):
 

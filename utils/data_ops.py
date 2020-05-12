@@ -1,6 +1,7 @@
 """
 """
 import os
+import random
 import fnmatch
 
 import cv2
@@ -8,6 +9,8 @@ import numpy as np
 import tensorflow as tf
 
 from PIL import Image, ImageOps
+
+from pokemon_data import PokemonData
 
 
 def normalize(x):
@@ -61,6 +64,10 @@ def crop_sprite(im):
     is not all white, and crops to there plus one pixel for padding
     """
 
+    l = len(im.shape)
+    if l < 3:
+        im = np.expand_dims(im, 2)
+        im = np.concatenate([im, im, im], 2)
     h, w, c = im.shape
 
     im_n = im/255.

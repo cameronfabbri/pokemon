@@ -14,8 +14,6 @@ import tensorflow_addons as tfa
 import network
 import utils.data_ops as do
 
-from pokemon_data import PokemonData
-
 
 def make_model_dirs():
     """ Creates all directories to save all the models in """
@@ -42,14 +40,14 @@ def main():
     random.seed(seed_value)
     np.random.seed(seed_value)
 
+    dataset = 'pokemon'
     dataset = 'afhq'
-    #dataset = 'pokemon'
 
     if dataset == 'pokemon':
         # Using gen1 and gen5
         gens = {
             0: 1,
-            1: 5,
+            1: 5
         }
 
         train_data_dict, test_data_dict = do.get_pokemon_data(list(gens.values()))
@@ -58,7 +56,7 @@ def main():
 
         gens = {
             0: 1,
-            1: 2,
+            1: 2
         }
 
         train_data_dict, test_data_dict = do.get_afhq()
@@ -68,8 +66,10 @@ def main():
 
     c_dim = len(list(gens.keys()))
 
-    save_freq = 500
+    save_freq = 100
+    ema_freq = 1
     batch_size = 8
+    starting_step = 1
     num_iters = 100000
     latent_dim = 16 # 16
     style_dim = 64 # 64
@@ -112,12 +112,16 @@ def main():
 
     # If a model exists, load it
     if os.path.exists('models/network_g_avg/checkpoint'):
+        print('Loading g weights')
         network_g.load_weights('models/network_g_avg/model')
     if os.path.exists('models/network_d_avg/checkpoint'):
+        print('Loading d weights')
         network_d.load_weights('models/network_d_avg/model')
     if os.path.exists('models/network_e_avg/checkpoint'):
+        print('Loading e weights')
         network_e.load_weights('models/network_e_avg/model')
     if os.path.exists('models/network_f_avg/checkpoint'):
+        print('Loading f weights')
         network_f.load_weights('models/network_f_avg/model')
 
     def get_batch(
@@ -392,7 +396,7 @@ def main():
     test_x_gen1_im = np.squeeze(do.unnormalize(test_x_gen1[0].numpy()).astype(np.uint8))
     test_x_gen5_im = np.squeeze(do.unnormalize(test_x_gen5[0].numpy()).astype(np.uint8))
 
-    for step in range(1, num_iters):
+    for step in range(starting_step, num_iters):
 
         lambda_ds = tf.convert_to_tensor(lambda_ds_start * (num_iters - step) / (num_iters - 1))
 
@@ -445,26 +449,21 @@ def main():
         statement += ' | cyc_loss: %.5f' % cyc_loss
         print(statement)
 
-        if step % save_freq == 0:
-
-            print('Saving out models...\n')
-
-            # Save model weights (non averaged)
-            network_g.save_weights('models/network_g/model', save_format='tf')
-            network_d.save_weights('models/network_d/model', save_format='tf')
-            network_e.save_weights('models/network_e/model', save_format='tf')
-            network_f.save_weights('models/network_f/model', save_format='tf')
+        if step % ema_freq:
 
             # Average the model parameters except discriminator
             g_opt.assign_average_vars(network_g.variables)
             e_opt.assign_average_vars(network_e.variables)
             f_opt.assign_average_vars(network_f.variables)
 
-            # Save out averaged network weights for testing externally
-            network_g.save_weights('models/network_g_avg/model', save_format='tf')
-            network_d.save_weights('models/network_d_avg/model', save_format='tf')
-            network_e.save_weights('models/network_e_avg/model', save_format='tf')
-            network_f.save_weights('models/network_f_avg/model', save_format='tf')
+        if step % save_freq == 0:
+
+            print('Saving out models...\n')
+
+            network_g.save_weights('models/network_g/model', save_format='tf')
+            network_d.save_weights('models/network_d/model', save_format='tf')
+            network_e.save_weights('models/network_e/model', save_format='tf')
+            network_f.save_weights('models/network_f/model', save_format='tf')
 
             # Test the model using the averaged weights
 
@@ -494,11 +493,6 @@ def main():
             canvas3 = cv2.hconcat([test_x_fake3, test_x_fake4])
             canvas = cv2.vconcat([canvas1, canvas2, canvas3])
             cv2.imwrite(os.path.join('models', 'images', 'canvas_'+str(step)+'.png'), canvas)
-
-            # Load back up the non-averaged weights to continue training with
-            network_g.load_weights('models/network_g/model')
-            network_e.load_weights('models/network_e/model')
-            network_f.load_weights('models/network_f/model')
 
 
 if __name__ == '__main__':
